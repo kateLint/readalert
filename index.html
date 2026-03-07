@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nap Guard + Shelter Button</title>
+  <meta name="description" content="Live red alert dashboard with smart nap windows and nearest shelter search." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<body>
+  <div class="bg-layer" aria-hidden="true">
+    <div class="aurora aurora-a"></div>
+    <div class="aurora aurora-b"></div>
+    <div class="grid-noise"></div>
+  </div>
+
+  <div id="app">
+    <header class="hero panel">
+      <div>
+        <p class="eyebrow">Real-time safety assistant</p>
+        <h1>Nap Guard + Shelter Button</h1>
+        <p class="hero-sub">Use RedAlert data to suggest nap windows and instantly find nearby shelters.</p>
+      </div>
+      <div class="live-pill" id="live-pill">Live feed: connecting</div>
+    </header>
+
+    <section class="panel controls-grid">
+      <div class="control-block">
+        <label class="label" for="api-key-input">API key (optional for production socket)</label>
+        <div class="inline-row">
+          <input id="api-key-input" type="password" placeholder="Paste your RedAlert API key" />
+          <button id="connect-prod-btn" class="btn ghost">Use Prod Socket</button>
+          <button id="connect-test-btn" class="btn">Use Test Socket</button>
+        </div>
+      </div>
+
+      <div class="control-block">
+        <span class="label">Nap duration</span>
+        <div class="preset-row" id="nap-duration-row">
+          <button class="btn preset active" data-min="15">15m</button>
+          <button class="btn preset" data-min="20">20m</button>
+          <button class="btn preset" data-min="30">30m</button>
+          <button class="btn preset" data-min="45">45m</button>
+        </div>
+      </div>
+
+      <div class="control-block">
+        <span class="label">Nap guard</span>
+        <div class="inline-row">
+          <button id="start-nap-btn" class="btn">Start nap</button>
+          <button id="stop-nap-btn" class="btn ghost">Stop</button>
+          <div class="nap-timer" id="nap-timer">00:00</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="kpi-grid">
+      <article class="panel kpi">
+        <h3>Current risk score</h3>
+        <p class="kpi-value" id="risk-score">--</p>
+      </article>
+      <article class="panel kpi">
+        <h3>Best nap start</h3>
+        <p class="kpi-value" id="best-nap-time">--</p>
+      </article>
+      <article class="panel kpi">
+        <h3>Alerts last 24h</h3>
+        <p class="kpi-value" id="alerts-24h">--</p>
+      </article>
+      <article class="panel kpi">
+        <h3>Peak period</h3>
+        <p class="kpi-value" id="peak-period">--</p>
+      </article>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="title-row">
+        <h2>Nap safety windows (next 12h)</h2>
+        <p class="muted">Click a bar to pick a start time</p>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="napWindowChart"></canvas>
+      </div>
+      <p id="picked-window" class="picked-window">No window selected yet.</p>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="title-row">
+        <h2>Recent alert timeline (last 7 days)</h2>
+        <p class="muted">Interactive zoom and hover</p>
+      </div>
+      <div class="chart-wrap tall">
+        <canvas id="timelineChart"></canvas>
+      </div>
+    </section>
+
+    <section class="panel shelter-panel">
+      <div class="title-row">
+        <h2>Shelter Button</h2>
+        <p class="muted">Nearest shelters from your location</p>
+      </div>
+      <div class="inline-row shelter-actions">
+        <button id="find-shelter-btn" class="btn">Find nearest shelters</button>
+        <label class="checkbox-wrap">
+          <input id="wheelchair-only" type="checkbox" />
+          Wheelchair accessible only
+        </label>
+      </div>
+      <div id="shelter-status" class="shelter-status">Press the button to search.</div>
+      <div id="shelter-results" class="shelter-results"></div>
+    </section>
+
+    <section class="panel feed-panel">
+      <div class="title-row">
+        <h2>Live alert feed</h2>
+        <p class="muted">Latest events from socket stream</p>
+      </div>
+      <ul id="live-feed-list" class="feed-list"></ul>
+    </section>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/main.js"></script>
+</body>
+
+</html>
