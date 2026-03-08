@@ -8,7 +8,7 @@
   <meta name="description" content="Live red alert dashboard with smart nap windows and nearest shelter search." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&family=Space+Grotesk:wght@400;500;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="stylesheet" href="/style.css" />
 </head>
@@ -23,25 +23,30 @@
   <div id="app">
     <header class="hero panel">
       <div>
-        <p class="eyebrow">Real-time safety assistant</p>
-        <h1>Nap Guard + Shelter Button</h1>
-        <p class="hero-sub">Use RedAlert data to suggest nap windows and instantly find nearby shelters.</p>
+        <p class="eyebrow" id="txt-eyebrow">Real-time safety assistant</p>
+        <h1 id="txt-title">Nap Guard + Shelter Button</h1>
+        <p class="hero-sub" id="txt-sub">Use RedAlert data to suggest nap windows and instantly find nearby shelters.</p>
       </div>
-      <div class="live-pill" id="live-pill">Live feed: connecting</div>
+      <div class="hero-actions">
+        <div class="lang-toggle" id="lang-toggle" role="group" aria-label="Language toggle">
+          <button class="btn lang-btn active" id="lang-en-btn" type="button">EN</button>
+          <button class="btn ghost lang-btn" id="lang-he-btn" type="button">HE</button>
+        </div>
+        <div class="live-pill" id="live-pill">Live feed: connecting</div>
+      </div>
     </header>
 
     <section class="panel controls-grid">
       <div class="control-block">
-        <label class="label" for="api-key-input">API key (optional for production socket)</label>
+        <label class="label" for="api-key-input" id="txt-api-key-label">API key (optional for production socket)</label>
         <div class="inline-row">
           <input id="api-key-input" type="password" placeholder="Paste your RedAlert API key" />
           <button id="connect-prod-btn" class="btn ghost">Use Prod Socket</button>
-          <button id="connect-test-btn" class="btn">Use Test Socket</button>
         </div>
       </div>
 
       <div class="control-block">
-        <span class="label">Nap duration</span>
+        <span class="label" id="txt-nap-duration">Nap duration</span>
         <div class="preset-row" id="nap-duration-row">
           <button class="btn preset active" data-min="15">15m</button>
           <button class="btn preset" data-min="20">20m</button>
@@ -51,7 +56,7 @@
       </div>
 
       <div class="control-block">
-        <span class="label">Nap guard</span>
+        <span class="label" id="txt-nap-guard">Nap guard</span>
         <div class="inline-row">
           <button id="start-nap-btn" class="btn">Start nap</button>
           <button id="stop-nap-btn" class="btn ghost">Stop</button>
@@ -62,27 +67,102 @@
 
     <section class="kpi-grid">
       <article class="panel kpi">
-        <h3>Current risk score</h3>
+        <h3 id="txt-kpi-risk">Current risk score</h3>
         <p class="kpi-value" id="risk-score">--</p>
       </article>
       <article class="panel kpi">
-        <h3>Best nap start</h3>
+        <h3 id="txt-kpi-best-nap">Best nap start</h3>
         <p class="kpi-value" id="best-nap-time">--</p>
       </article>
       <article class="panel kpi">
-        <h3>Alerts last 24h</h3>
+        <h3 id="txt-kpi-alerts">Alerts last 24h</h3>
         <p class="kpi-value" id="alerts-24h">--</p>
       </article>
       <article class="panel kpi">
-        <h3>Peak period</h3>
+        <h3 id="txt-kpi-peak">Peak period</h3>
         <p class="kpi-value" id="peak-period">--</p>
       </article>
     </section>
 
+    <section class="panel coach-panel">
+      <div class="title-row">
+        <h2 id="txt-coach-title">Smart Coach</h2>
+        <p class="muted" id="txt-coach-sub">Useful advice with a funny personality</p>
+      </div>
+      <div class="inline-row" id="coach-mode-row">
+        <button class="btn coach-mode active" data-mode="funny">Funny</button>
+        <button class="btn ghost coach-mode" data-mode="calm">Calm</button>
+        <button class="btn ghost coach-mode" data-mode="strict">Sergeant</button>
+      </div>
+      <p class="coach-line" id="coach-line">Analyzing your best move...</p>
+      <div class="inline-row quick-actions">
+        <button id="quick-best-nap" class="btn">Best nap plan</button>
+        <button id="quick-find-shelter" class="btn ghost">Nearest shelter now</button>
+        <button id="quick-copy-report" class="btn ghost">Copy status report</button>
+      </div>
+    </section>
+
+    <section class="panel checklist-panel">
+      <div class="title-row">
+        <h2 id="txt-ready-title">Ready Check</h2>
+        <p class="muted" id="txt-ready-sub">Small actions, big improvement</p>
+      </div>
+      <div class="checklist-grid">
+        <label><input type="checkbox" id="check-water" /> <span id="txt-check-water">Water bottle near bed</span></label>
+        <label><input type="checkbox" id="check-phone" /> <span id="txt-check-phone">Phone charged above 50%</span></label>
+        <label><input type="checkbox" id="check-shoes" /> <span id="txt-check-shoes">Shoes and keys near door</span></label>
+      </div>
+      <div class="prep-meter">
+        <div class="prep-fill" id="prep-fill"></div>
+      </div>
+      <p class="picked-window" id="prep-score">Preparation score: 0%</p>
+      <p class="muted" id="prep-joke">Tiny prep beats panic.</p>
+    </section>
+
+    <section class="panel route-panel">
+      <div class="title-row">
+        <h2 id="txt-route-title">Send or Shelter</h2>
+        <p class="muted" id="txt-route-sub">Should you leave now or wait a few minutes?</p>
+      </div>
+      <div class="route-grid">
+        <div class="control-block">
+          <label class="label" for="route-from" id="txt-route-from-label">From city</label>
+          <input id="route-from" type="text" placeholder="Tel Aviv" list="city-options" />
+        </div>
+        <div class="control-block">
+          <label class="label" for="route-to" id="txt-route-to-label">To city</label>
+          <input id="route-to" type="text" placeholder="Ramat Gan" list="city-options" />
+        </div>
+        <div class="control-block">
+          <label class="label" for="route-minutes" id="txt-route-minutes-label">Estimated trip minutes</label>
+          <input id="route-minutes" type="number" min="1" max="180" value="20" />
+        </div>
+        <div class="control-block">
+          <label class="label" for="route-mode" id="txt-route-mode-label">Transport mode</label>
+          <select id="route-mode">
+            <option value="scooter">Scooter</option>
+            <option value="bike">Bike</option>
+            <option value="car">Car</option>
+            <option value="foot">Foot</option>
+          </select>
+        </div>
+      </div>
+      <div class="inline-row">
+        <button id="check-route-btn" class="btn">Check this run</button>
+        <button id="route-use-best-btn" class="btn ghost">Use best nap window now</button>
+      </div>
+      <article class="route-verdict" id="route-verdict-card">
+        <strong id="route-verdict-title">Run check pending</strong>
+        <p id="route-verdict-reason">Enter route details to get a decision.</p>
+      </article>
+      <div class="route-details" id="route-details"></div>
+      <datalist id="city-options"></datalist>
+    </section>
+
     <section class="panel chart-panel">
       <div class="title-row">
-        <h2>Nap safety windows (next 12h)</h2>
-        <p class="muted">Click a bar to pick a start time</p>
+        <h2 id="txt-chart-nap-title">Nap safety windows (next 12h)</h2>
+        <p class="muted" id="txt-chart-nap-sub">Click a bar to pick a start time</p>
       </div>
       <div class="chart-wrap">
         <canvas id="napWindowChart"></canvas>
@@ -92,8 +172,8 @@
 
     <section class="panel chart-panel">
       <div class="title-row">
-        <h2>Recent alert timeline (last 7 days)</h2>
-        <p class="muted">Interactive zoom and hover</p>
+        <h2 id="txt-chart-timeline-title">Recent alert timeline (last 7 days)</h2>
+        <p class="muted" id="txt-chart-timeline-sub">Interactive zoom and hover</p>
       </div>
       <div class="chart-wrap tall">
         <canvas id="timelineChart"></canvas>
@@ -102,14 +182,14 @@
 
     <section class="panel shelter-panel">
       <div class="title-row">
-        <h2>Shelter Button</h2>
-        <p class="muted">Nearest shelters from your location</p>
+        <h2 id="txt-shelter-title">Shelter Button</h2>
+        <p class="muted" id="txt-shelter-sub">Nearest shelters from your location</p>
       </div>
       <div class="inline-row shelter-actions">
         <button id="find-shelter-btn" class="btn">Find nearest shelters</button>
         <label class="checkbox-wrap">
           <input id="wheelchair-only" type="checkbox" />
-          Wheelchair accessible only
+          <span id="txt-wheelchair-only">Wheelchair accessible only</span>
         </label>
       </div>
       <div id="shelter-status" class="shelter-status">Press the button to search.</div>
@@ -118,8 +198,8 @@
 
     <section class="panel feed-panel">
       <div class="title-row">
-        <h2>Live alert feed</h2>
-        <p class="muted">Latest events from socket stream</p>
+        <h2 id="txt-feed-title">Live alert feed</h2>
+        <p class="muted" id="txt-feed-sub">Latest events from socket stream</p>
       </div>
       <ul id="live-feed-list" class="feed-list"></ul>
     </section>
