@@ -6,7 +6,10 @@ const API = {
   summary: '/api/stats/summary'
 };
 
-const DIRECT_API_BASE = 'http://localhost:4000';
+// In local dev, Vite runs on :5173 while Express runs on :4000.
+// In production (Vercel), both frontend and API are same-origin.
+const IS_LOCAL_DEV = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const DIRECT_API_BASE = IS_LOCAL_DEV ? 'http://localhost:4000' : '';
 
 const FALLBACK_CITIES = [
   { city: 'Tel Aviv', region: 'Center', pressure: 36, shelterEtaMin: 3, recentAlertsMinAgo: 40 },
