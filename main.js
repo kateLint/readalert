@@ -30,7 +30,6 @@ const FALLBACK_CITIES = [
 /** Shelter Search Logic **/
 /** Shelter Search Logic **/
 function renderShelterResults(results) {
-  console.log('Rendering shelter results:', results?.length);
   const resultsDiv = document.getElementById('shelter-results');
   if (!resultsDiv) return;
 
@@ -1180,7 +1179,6 @@ async function updateVerdictMap(fromCity, toCity) {
   try {
     const cleanFrom = fromCity.split(' - ')[0].split(' • ')[0].trim();
     const cleanTo = toCity.split(' - ')[0].split(' • ')[0].trim();
-    console.log('Fetching coords for:', { fromCity, toCity, cleanFrom, cleanTo });
 
     const [fromCoords, toCoords] = await Promise.all([
       fetchJsonWithFallback(`/api/city-coords?city=${encodeURIComponent(cleanFrom)}`),
