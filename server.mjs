@@ -16,7 +16,11 @@ if (!REDALERT_API_KEY) {
   );
 }
 
-app.use(cors());
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim())
+  : ['http://localhost:5173', 'http://localhost:4000'];
+
+app.use(cors({ origin: ALLOWED_ORIGINS }));
 app.use(express.json());
 
 const CITY_MAP = {
