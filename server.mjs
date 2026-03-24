@@ -12,11 +12,51 @@ if (!REDALERT_API_KEY) {
   console.warn(
     '[server] REDALERT_API_KEY is not set. Real data will not load. ' +
     'Get an API key from https://redalert.orielhaim.com/docs/quick-start and ' +
-    'start the server with REDALERT_API_KEY=your-key-here.'
+    'start the server with REDALERT_API_KEY=pr_loOvnUUAGOmFCKmjWiWdotQdeygLLMcneLPIYIMrgAxOdvoUjSAhGmZFuWVtwJGX'
   );
 }
 
 app.use(cors());
+app.use(express.json());
+
+const CITY_MAP = {
+  'תל אביב': { en: 'Tel Aviv', lat: 32.0853, lon: 34.7818 },
+  'תל אביב - יפו': { en: 'Tel Aviv', lat: 32.0853, lon: 34.7818 },
+  'תל אביב-יפו': { en: 'Tel Aviv', lat: 32.0853, lon: 34.7818 },
+  'ירושלים': { en: 'Jerusalem', lat: 31.7683, lon: 35.2137 },
+  'חיפה': { en: 'Haifa', lat: 32.7940, lon: 34.9896 },
+  'באר שבע': { en: 'Beer Sheva', lat: 31.2530, lon: 34.7915 },
+  'אשדוד': { en: 'Ashdod', lat: 31.8044, lon: 34.6553 },
+  'אשקלון': { en: 'Ashkelon', lat: 31.6688, lon: 34.5743 },
+  'ראשון לציון': { en: 'Rishon LeZion', lat: 31.9730, lon: 34.7925 },
+  'פתח תקווה': { en: 'Petah Tikva', lat: 32.0840, lon: 34.8878 },
+  'נתניה': { en: 'Netanya', lat: 32.3215, lon: 34.8532 },
+  'חולון': { en: 'Holon', lat: 32.0158, lon: 34.7874 },
+  'בני ברק': { en: 'Bnei Brak', lat: 32.0833, lon: 34.8333 },
+  'רמת גן': { en: 'Ramat Gan', lat: 32.0822, lon: 34.8107 },
+  'רחובות': { en: 'Rehovot', lat: 31.8928, lon: 34.8113 },
+  'בת ים': { en: 'Bat Yam', lat: 32.0132, lon: 34.7481 },
+  'הרצליה': { en: 'Herzliya', lat: 32.1624, lon: 34.8447 },
+  'כפר סבא': { en: 'Kfar Saba', lat: 32.1750, lon: 34.9069 },
+  'רעננה': { en: 'Ra\'anana', lat: 32.1833, lon: 34.8667 },
+  'חדרה': { en: 'Hadera', lat: 32.4340, lon: 34.9197 },
+  'מודיעין': { en: 'Modi\'in', lat: 31.9077, lon: 35.0069 },
+  'לוד': { en: 'Lod', lat: 31.9458, lon: 34.8967 },
+  'רמלה': { en: 'Ramle', lat: 31.9272, lon: 34.8631 },
+  'נהריה': { en: 'Nahariya', lat: 33.0061, lon: 35.0931 },
+  'עכו': { en: 'Acre', lat: 32.9333, lon: 35.0833 },
+  'אילת': { en: 'Eilat', lat: 29.5577, lon: 34.9519 }
+};
+
+app.get('/api/city-coords', (req, res) => {
+  const { city } = req.query;
+  const match = CITY_MAP[city];
+  if (match) {
+    res.json({ lat: match.lat, lon: match.lon, en: match.en });
+  } else {
+    res.status(404).json({ error: 'City not found in mapping' });
+  }
+});
 
 function withAuthHeaders() {
   return REDALERT_API_KEY
@@ -39,11 +79,11 @@ async function requestRedAlert(pathname, query = {}) {
   return res.json();
 }
 
-async function fetchRedAlertHistory(limit = 500) {
+async function fetchRedAlertHistory(limit = 100) {
   const data = await requestRedAlert('/api/stats/history', {
-    limit,
+    limit: Math.min(limit, 100),
     sort: 'timestamp',
-    order: 'asc'
+    order: 'desc'
   }).catch((error) => {
     // eslint-disable-next-line no-console
     console.error('[server] RedAlert history error', error.message);
@@ -125,7 +165,7 @@ app.get('/api/stats/summary', async (req, res) => {
     const data = await requestRedAlert('/api/stats/summary', {
       startDate: req.query.startDate,
       endDate: req.query.endDate,
-      include: req.query.include,
+      include: req.query.include === 'totals' ? undefined : req.query.include,
       topLimit: req.query.topLimit,
       timelineGroup: req.query.timelineGroup
     });
@@ -139,14 +179,35 @@ app.get('/api/stats/summary', async (req, res) => {
 
 app.get('/api/shelter/search', async (req, res) => {
   try {
+    let { lat, lon, city, radiusKm } = req.query;
+
+    // RedAlert API requires lat/lon. If missing but city is there, provide Israel center defaults or city-specific if mapped.
+    if (city && (!lat || !lon)) {
+      const match = CITY_MAP[city];
+      if (match) {
+        lat = String(match.lat);
+        lon = String(match.lon);
+        radiusKm = radiusKm || '20'; // Specific city search, default to 20km
+      } else {
+        lat = lat || '31.9';
+        lon = lon || '34.8';
+        radiusKm = radiusKm || '500';
+      }
+    }
+
+    // Map Hebrew city names to English for better API matching
+    if (city && CITY_MAP[city]) {
+      city = CITY_MAP[city].en;
+    }
+
     const data = await requestRedAlert('/api/shelter/search', {
-      lat: req.query.lat,
-      lon: req.query.lon,
+      lat,
+      lon,
       limit: req.query.limit,
-      radiusKm: req.query.radiusKm,
+      radiusKm,
       wheelchairOnly: req.query.wheelchairOnly,
       shelterType: req.query.shelterType,
-      city: req.query.city
+      city
     });
     res.json(data);
   } catch (error) {
@@ -156,8 +217,24 @@ app.get('/api/shelter/search', async (req, res) => {
   }
 });
 
-// Cities stats proxy – exposes real RedAlert city statistics so the frontend
-// can later do per-location risk, maps, etc.
+app.get('/api/stats/cities', async (req, res) => {
+  try {
+    const data = await requestRedAlert('/api/stats/cities', {
+      limit: req.query.limit,
+      search: req.query.search,
+      sort: req.query.sort,
+      order: req.query.order,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate
+    });
+    res.json(data);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('[server] /api/stats/cities failed', error.message);
+    res.status(500).json({ error: 'Failed to load city stats from RedAlert' });
+  }
+});
+
 app.get('/api/cities', async (req, res) => {
   try {
     const limit = Number.parseInt(req.query.limit, 10) || 500;

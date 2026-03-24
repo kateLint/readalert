@@ -1,1114 +1,1456 @@
-import { io } from 'socket.io-client';
 import './style.css';
 
-const CONFIG = {
-  SUMMARY_URL: '/api/stats/summary',
-  HISTORY_URL: '/api/alerts',
-  SHELTER_SEARCH_URL: '/api/shelter/search',
-  CITIES_URL: '/api/cities'
+const API = {
+  cities: '/api/cities',
+  cityStats: '/api/cities',
+  summary: '/api/stats/summary'
 };
 
-const COLORS = {
-  line: '#22d3ee',
-  barGood: 'rgba(45, 212, 191, 0.75)',
-  barRisk: 'rgba(251, 113, 133, 0.75)',
-  text: '#dce9fb',
-  grid: 'rgba(152, 180, 218, 0.24)'
+const DIRECT_API_BASE = 'http://localhost:4000';
+
+const FALLBACK_CITIES = [
+  { city: 'Tel Aviv', region: 'Center', pressure: 36, shelterEtaMin: 3, recentAlertsMinAgo: 40 },
+  { city: 'Ramat Gan', region: 'Center', pressure: 34, shelterEtaMin: 3, recentAlertsMinAgo: 45 },
+  { city: 'Holon', region: 'Center', pressure: 33, shelterEtaMin: 4, recentAlertsMinAgo: 52 },
+  { city: 'Petah Tikva', region: 'Center', pressure: 31, shelterEtaMin: 4, recentAlertsMinAgo: 56 },
+  { city: 'Jerusalem', region: 'Jerusalem', pressure: 28, shelterEtaMin: 5, recentAlertsMinAgo: 70 },
+  { city: 'Haifa', region: 'North', pressure: 22, shelterEtaMin: 6, recentAlertsMinAgo: 92 },
+  { city: 'Ashdod', region: 'South', pressure: 49, shelterEtaMin: 3, recentAlertsMinAgo: 25 },
+  { city: 'Ashkelon', region: 'South', pressure: 58, shelterEtaMin: 2, recentAlertsMinAgo: 18 },
+  { city: 'Beer Sheva', region: 'South', pressure: 41, shelterEtaMin: 4, recentAlertsMinAgo: 37 },
+  { city: 'Netanya', region: 'Sharon', pressure: 27, shelterEtaMin: 5, recentAlertsMinAgo: 80 },
+  { city: 'Herzliya', region: 'Sharon', pressure: 24, shelterEtaMin: 4, recentAlertsMinAgo: 98 },
+  { city: 'Rehovot', region: 'Center', pressure: 30, shelterEtaMin: 4, recentAlertsMinAgo: 68 },
+  { city: 'Bat Yam', region: 'Center', pressure: 39, shelterEtaMin: 3, recentAlertsMinAgo: 35 },
+  { city: 'Bnei Brak', region: 'Center', pressure: 37, shelterEtaMin: 3, recentAlertsMinAgo: 42 },
+  { city: 'Lod', region: 'Center', pressure: 44, shelterEtaMin: 3, recentAlertsMinAgo: 31 },
+  { city: 'Modiin', region: 'Center', pressure: 25, shelterEtaMin: 5, recentAlertsMinAgo: 89 }
+];
+
+/** Shelter Search Logic **/
+/** Shelter Search Logic **/
+function renderShelterResults(results) {
+  console.log('Rendering shelter results:', results?.length);
+  const resultsDiv = document.getElementById('shelter-results');
+  if (!resultsDiv) return;
+
+  if (!results || results.length === 0) {
+    resultsDiv.innerHTML = `<p class="subtle">${t('shelterNone')}</p>`;
+    return;
+  }
+
+  resultsDiv.innerHTML = results.map(s => `
+    <div class="shelter-item">
+      <div class="shelter-item-header">
+        <span class="shelter-address">${s.address || s.building_name || 'אדרס לא ידוע'}</span>
+        <span class="shelter-dist">${s.distance_km ? s.distance_km.toFixed(2) + ' km' : (s.distance_meters || 0) + ' m'}</span>
+      </div>
+      <div class="shelter-details">${s.city} ${s.building_name ? ' - ' + s.building_name : ''}</div>
+      <div class="shelter-tags">
+        ${s.is_official ? `<span class="tag official">${t('shelterOfficial')}</span>` : ''}
+        ${s.wheelchair_accessible ? `<span class="tag access">${t('shelterAccessible')}</span>` : ''}
+        <span class="tag">${s.shelter_type_he || s.shelter_type}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function performShelterSearch(params) {
+  const resultsDiv = document.getElementById('shelter-results');
+  if (!resultsDiv) return;
+
+  resultsDiv.innerHTML = `<p class="subtle">${t('shelterLoading')}</p>`;
+
+  const query = new URLSearchParams(params).toString();
+  try {
+    const data = await fetchJsonWithFallback(`/api/shelter/search?${query}`);
+    const results = Array.isArray(data) ? data : (data && data.results) ? data.results : [];
+    renderShelterResults(results);
+  } catch (err) {
+    console.error('Shelter search failed', err);
+    if (typeof renderShelterResults === 'function') {
+      renderShelterResults([]);
+    }
+  }
+}
+
+const VERDICTS = [
+  {
+    key: 'send',
+    min: 0,
+    max: 24,
+    icon: '>>',
+    stateClass: 'state-safe'
+  },
+  {
+    key: 'fine',
+    min: 25,
+    max: 44,
+    icon: '~',
+    stateClass: 'state-safe'
+  },
+  {
+    key: 'spicy',
+    min: 45,
+    max: 64,
+    icon: '!',
+    stateClass: 'state-caution'
+  },
+  {
+    key: 'coffee',
+    min: 65,
+    max: 81,
+    icon: 'C',
+    stateClass: 'state-risk'
+  },
+  {
+    key: 'shelter',
+    min: 82,
+    max: 100,
+    icon: '#',
+    stateClass: 'state-alert'
+  }
+];
+
+const state = {
+  lang: 'he',
+  from: '',
+  to: '',
+  durationMin: 25,
+  mode: 'foot',
+  allCities: [],
+  liveDataReady: false,
+  lastResult: null,
+  globalRecent24h: 18,
+  timelineBuckets: new Array(24).fill(0),
+  timelineSelectedIndex: 23,
+  timelineRangeHours: 24,
+  map: null,
+  mapMarkers: []
+};
+
+let toastTimerId = null;
+
+const els = {
+  langEn: document.querySelector('#lang-en'),
+  langHe: document.querySelector('#lang-he'),
+  fromInput: document.querySelector('#from-city'),
+  toInput: document.querySelector('#to-city'),
+  fromSuggestions: document.querySelector('#from-suggestions'),
+  toSuggestions: document.querySelector('#to-suggestions'),
+  durationTabs: document.querySelector('#duration-tabs'),
+  modeButtons: document.querySelector('#mode-buttons'),
+  goBtn: document.querySelector('#go-btn'),
+  verdictCard: document.querySelector('#verdict-card'),
+  statusPill: document.querySelector('#status-pill'),
+  verdictIcon: document.querySelector('#verdict-icon'),
+  verdictTitle: document.querySelector('#verdict-title'),
+  verdictSubtitle: document.querySelector('#verdict-subtitle'),
+  punchline: document.querySelector('#punchline'),
+  routeScore: document.querySelector('#route-score'),
+  stressMeter: document.querySelector('#stress-meter'),
+  routeMeta: document.querySelector('#route-meta'),
+  originPressure: document.querySelector('#origin-pressure'),
+  recentWindow: document.querySelector('#recent-window'),
+  shelterSpeed: document.querySelector('#shelter-speed'),
+  verdictMap: document.querySelector('#verdict-map'),
+  shareBtn: document.querySelector('#share-btn'),
+  saveBtn: document.querySelector('#save-btn'),
+  shareVerdict: document.querySelector('#share-verdict'),
+  shareRoute: document.querySelector('#share-route'),
+  sharePunchline: document.querySelector('#share-punchline'),
+  toast: document.querySelector('#toast'),
+  timelineZoom: document.querySelector('#timeline-zoom'),
+  coffeeIndicator: document.querySelector('#coffee-indicator')
 };
 
 const I18N = {
   en: {
-    eyebrow: 'Real-time safety assistant',
-    title: 'Nap Guard + Shelter Button',
-    sub: 'Use RedAlert data to suggest nap windows and instantly find nearby shelters.',
-    apiKeyLabel: 'API key (optional for production socket)',
-    apiKeyPlaceholder: 'Paste your RedAlert API key',
-    connectProd: 'Use Prod Socket',
-    napDuration: 'Nap duration',
-    napGuard: 'Nap guard',
-    startNap: 'Start nap',
-    stopNap: 'Stop',
-    kpiRisk: 'Current risk score',
-    kpiBestNap: 'Best nap start',
-    kpiAlerts: 'Alerts last 24h',
-    kpiPeak: 'Peak period',
-    coachTitle: 'Smart Coach',
-    coachSub: 'Useful advice with a funny personality',
-    modeFunny: 'Funny',
-    modeCalm: 'Calm',
-    modeStrict: 'Sergeant',
-    quickBestNap: 'Best nap plan',
-    quickFindShelter: 'Nearest shelter now',
-    quickCopyReport: 'Copy status report',
-    readyTitle: 'Ready Check',
-    readySub: 'Small actions, big improvement',
-    checkWater: 'Water bottle near bed',
-    checkPhone: 'Phone charged above 50%',
-    checkShoes: 'Shoes and keys near door',
-    chartNapTitle: 'Nap safety windows (next 12h)',
-    chartNapSub: 'Click a bar to pick a start time',
-    chartTimelineTitle: 'Recent alert timeline (last 7 days)',
-    chartTimelineSub: 'Interactive zoom and hover',
-    shelterTitle: 'Shelter Button',
-    shelterSub: 'Nearest shelters from your location',
-    findShelter: 'Find nearest shelters',
-    wheelchairOnly: 'Wheelchair accessible only',
-    feedTitle: 'Live alert feed',
-    feedSub: 'Latest events from socket stream',
-    feedConnecting: 'Live feed: connecting',
-    feedDisconnected: 'Live feed: disconnected',
-    feedConnectionError: 'Live feed: connection error',
-    feedConnected: 'Live feed: production connected',
-    feedNeedsKey: 'Live feed: waiting for API key',
-    modeProd: 'production',
-    noWindowSelected: 'No window selected yet.',
-    selectedWindow: 'Selected: {time} | score {safety}% | risk {risk}%',
-    safetyUnit: '{score}% safe',
-    prepScore: 'Preparation score: {score}%',
-    prepJokeLow: 'Tiny prep beats panic. Start with one checkbox.',
-    prepJokeMid: 'Decent start. Keep stacking small wins.',
-    prepJokeHigh: 'Solid setup. One more item and you are golden.',
-    prepJokeMax: 'Elite status. Your future self says thank you.',
-    coachFunnyLow: 'Funny mode: sky is behaving, pillow approved. Best snooze launch: {time}.',
-    coachFunnyHigh: 'Funny mode: chaos vibes detected. Keep shoes ready and schedule nap for {time}.',
-    coachCalmLow: 'Calm mode: low risk now. You can nap soon, best starts around {time}.',
-    coachCalmHigh: 'Calm mode: risk is elevated. Keep essentials nearby and aim for {time}.',
-    coachStrictLow: 'Sergeant: acceptable conditions. Execute short nap at {time}.',
-    coachStrictHigh: 'Sergeant: no sloppy moves. Prep first, then reassess at {time}.',
-    coachOffline: 'Live socket is offline right now.',
-    napDone: 'Nap complete. Wake up champion.',
-    napStarted: 'Nap guard started for {minutes} minutes.',
-    wakeupFunny: 'Rise and shine, hero: {title}',
-    wakeupCalm: 'Please wake up calmly: {title}',
-    wakeupStrict: 'Wake up now: {title}',
-    pasteApiKey: 'Paste API key to connect production socket.',
-    geoUnsupported: 'Geolocation is not supported in this browser.',
-    shelterGettingLocation: 'Getting your location...',
-    shelterPressButton: 'Press the button to search.',
-    shelterNoResults: 'No shelters found for this query.',
-    shelterFound: 'Found {count} shelters nearby.',
-    shelterFailed: 'Failed to search shelters.',
-    shelterPermission: 'Location permission denied.',
-    openMap: 'Open in map',
-    unknownAddress: 'Unknown address',
-    unknownType: 'unknown',
-    statusCopied: 'Status report copied.',
-    statusCopyFailed: 'Could not copy report on this browser.',
-    bestNapStarts: 'Best nap starts at {time}.',
-    noNapWindows: 'No nap windows yet.',
-    couldNotLoadHistory: 'Could not load history from API proxy.',
-    couldNotLoadSummary: 'Could not load summary stats from API proxy.'
+    appName: 'Bring Coffee?',
+    heroLabel: 'Live Departure Check',
+    heroDesc: 'Type origin and destination, then get one clear answer: go now or wait.',
+    purposeLine: 'Goal: decide in seconds if leaving now is smart.',
+    feature1: '1. Choose origin and destination',
+    feature2: '2. Choose duration and travel mode',
+    feature3: '3. Get a clear decision',
+    feature4: '',
+    routeTitle: 'Should I leave now?',
+    routeSubtitle: 'Simple input, clear decision.',
+    fromLabel: 'From city',
+    toLabel: 'To city',
+    durationLabel: 'Trip duration',
+    modeLabel: 'Travel mode',
+    modeFoot: 'Foot',
+    modeBike: 'Bike',
+    modeScooter: 'Scooter',
+    modeCar: 'Car',
+    goBtn: 'Should I go?',
+    contextTitle: 'Quick context',
+    originPressureLabel: 'Origin pressure',
+    recentWindowLabel: 'Recent alert window',
+    shelterSpeedLabel: 'Shelter reach speed',
+    routeScoreLabel: 'Route score',
+    stressMeterLabel: 'Stress meter',
+    shareBtn: 'Share',
+    saveBtn: 'Save',
+    originShelterTitle: 'Pickup side shelter',
+    destinationShelterTitle: 'Dropoff side shelter',
+    timelineTitle: 'Alert Timeline',
+    timelineSubtitle: 'Last 24 hours, by hour',
+    timelineTotalFmt: 'Total: {count}',
+    timelinePeakFmt: 'Peak hour: {hour}',
+    timelineNowFmt: 'Now: {count}',
+    timelineNowAtFmt: 'Now: {time}',
+    timelineDetailFmt: '{hour} • {count} alerts',
+    shareSmall: 'Bring Coffee?',
+    fromPlaceholder: 'Tel Aviv',
+    toPlaceholder: 'Ramat Gan',
+    verdictPending: 'Verdict pending',
+    initialVerdictTitle: 'Pick route details and press the button',
+    initialVerdictSubtitle: 'Answer first. Logic second.',
+    initialPunchline: 'No bunker networking expected. Yet.',
+    initialMeta: 'Route metadata appears here.',
+    initialShelter: 'Nearest shelter details will appear after verdict.',
+    initialShareRoute: 'Tel Aviv -> Ramat Gan • 20m by scooter',
+    initialShareVerdict: 'Probably fine',
+    initialSharePunchline: 'Coffee is optional, confidence is not.',
+    liveDataRequired: 'Live data is required. Start the API server and verify your API key.',
+    liveDataLoaded: 'Live data connected successfully.',
+    liveNoSummary: 'Live data connected (summary stats are temporarily unavailable).',
+    runCheckFirstShare: 'Run a route check first, then share it.',
+    runCheckFirstSave: 'Run a route check first, then save.',
+    shareCopied: 'Share text copied to clipboard.',
+    shareCopyFail: 'Could not copy share text on this browser.',
+    saved: 'Route saved locally.',
+    missingCities: 'Pick both origin and destination cities first.',
+    unknownCities: 'Use a city from autocomplete so the score can be trusted.',
+    routeMetaFmt: '{from} -> {to} | {duration}m by {mode} | city-level model',
+    recentAgoFmt: '{minutes}m ago',
+    shelterAvgFmt: '{minutes}m avg',
+    shelterLineFmt: '{side}: nearest shelter around {eta}m away by foot. {rate}. Last local spike ~{minutes}m ago.',
+    sidePickup: 'Pickup',
+    sideDropoff: 'Dropoff',
+    lowLocal: 'Low local disruption',
+    moderateLocal: 'Moderate local disruption',
+    highLocal: 'High local disruption',
+    verdicts: {
+      send: {
+        label: 'Send it',
+        subtitle: 'Low pressure and low disruption likelihood.',
+        punchlines: ['No bunker networking expected.', 'Coffee is optional, confidence is not.']
+      },
+      fine: {
+        label: 'Probably fine',
+        subtitle: 'Generally acceptable with mild caution.',
+        punchlines: ['Feels like a normal errand with backup plans.', 'Slight uncertainty, still commuter-coded.']
+      },
+      spicy: {
+        label: 'A bit spicy',
+        subtitle: 'Moderate uncertainty. Could get inconvenient.',
+        punchlines: ['This one could develop a plot.', 'Not doomed, just dramatic.']
+      },
+      coffee: {
+        label: 'Bring coffee',
+        subtitle: 'Elevated interruption risk. Mentally prepare.',
+        punchlines: ['Less quick errand, more character-building episode.', 'Bring coffee and lower expectations.']
+      },
+      shelter: {
+        label: 'Shelter vibes',
+        subtitle: 'High route pressure. Reconsider timing.',
+        punchlines: ['This trip has shared-shelter small-talk energy.', 'You are not late. You are strategic.']
+      }
+    },
+    shelterSearchTitle: 'Nearby Shelters',
+    shelterSearchPlaceholder: 'Search by city...',
+    searchBtn: 'Search',
+    nearMeBtn: 'Near Me',
+    shelterEmptyMsg: 'Search for a city or use your location to find shelters.',
+    shelterLoading: 'Searching for shelters...',
+    shelterNone: 'No shelters found in this area.',
+    shelterOfficial: 'Official',
+    shelterAccessible: 'Accessible',
+    leaderboardTitle: 'Top Targeted Cities (24h)',
+    leaderboardCount: '{count} alerts',
+    routeStatsTitle: 'City Alert Stats',
+    thCity: 'City',
+    th24h: '24h',
+    thWar: 'War Total',
+    statsError: 'Failed to load statistics',
+    statsNoData: 'No data available'
   },
   he: {
-    eyebrow: 'עוזר בטיחות בזמן אמת',
-    title: 'Nap Guard + כפתור מקלט',
-    sub: 'שימוש בנתוני RedAlert כדי להציע חלונות שינה ולמצוא מיד מקלטים קרובים.',
-    apiKeyLabel: 'מפתח API (אופציונלי לסוקט פרודקשן)',
-    apiKeyPlaceholder: 'הדביקו כאן מפתח RedAlert',
-    connectProd: 'חיבור סוקט פרודקשן',
-    napDuration: 'משך שנ"צ',
-    napGuard: 'שומר שנ"צ',
-    startNap: 'התחל שנ"צ',
-    stopNap: 'עצור',
-    kpiRisk: 'מדד סיכון נוכחי',
-    kpiBestNap: 'זמן שנ"צ מומלץ',
-    kpiAlerts: 'התראות ב-24 שעות',
-    kpiPeak: 'שעת שיא',
-    coachTitle: 'מאמן חכם',
-    coachSub: 'המלצות שימושיות עם אופי מצחיק',
-    modeFunny: 'מצחיק',
-    modeCalm: 'רגוע',
-    modeStrict: 'קשוח',
-    quickBestNap: 'תוכנית שנ"צ טובה',
-    quickFindShelter: 'מקלט קרוב עכשיו',
-    quickCopyReport: 'העתקת דוח מצב',
-    readyTitle: 'בדיקת מוכנות',
-    readySub: 'צעדים קטנים, שיפור גדול',
-    checkWater: 'בקבוק מים ליד המיטה',
-    checkPhone: 'טלפון מעל 50% סוללה',
-    checkShoes: 'נעליים ומפתחות ליד הדלת',
-    chartNapTitle: 'חלונות שנ"צ בטוחים (12 שעות הקרובות)',
-    chartNapSub: 'לחצו על עמודה כדי לבחור זמן התחלה',
-    chartTimelineTitle: 'ציר התראות אחרונות (7 ימים)',
-    chartTimelineSub: 'זום והובר אינטראקטיביים',
-    shelterTitle: 'כפתור מקלט',
-    shelterSub: 'מקלטים קרובים מהמיקום שלך',
-    findShelter: 'חיפוש מקלטים קרובים',
-    wheelchairOnly: 'נגיש לכיסא גלגלים בלבד',
-    feedTitle: 'פיד התראות חי',
-    feedSub: 'אירועים אחרונים מהסוקט',
-    feedConnecting: 'פיד חי: מתחבר',
-    feedDisconnected: 'פיד חי: מנותק',
-    feedConnectionError: 'פיד חי: שגיאת חיבור',
-    feedConnected: 'פיד חי: מחובר לפרודקשן',
-    feedNeedsKey: 'פיד חי: ממתין למפתח API',
-    modeProd: 'פרודקשן',
-    noWindowSelected: 'עדיין לא נבחר חלון.',
-    selectedWindow: 'נבחר: {time} | ציון {safety}% | סיכון {risk}%',
-    safetyUnit: '{score}% בטוח',
-    prepScore: 'ציון מוכנות: {score}%',
-    prepJokeLow: 'הכנה קטנה עדיפה מפאניקה. התחילו בסימון אחד.',
-    prepJokeMid: 'התחלה טובה. תמשיכו לצבור נקודות.',
-    prepJokeHigh: 'מוכנות יפה. עוד סעיף ואתם מסודרים.',
-    prepJokeMax: 'רמת עילית. הגרסה העתידית שלכם מודה לכם.',
-    coachFunnyLow: 'מצב מצחיק: השמיים רגועים, הכרית מאושרת. זמן שנ"צ מומלץ: {time}.',
-    coachFunnyHigh: 'מצב מצחיק: יש וייבים של בלגן. השאירו נעליים מוכנות ושנ"צ ב-{time}.',
-    coachCalmLow: 'מצב רגוע: סיכון נמוך עכשיו. אפשר שנ"צ קצר, עדיף סביב {time}.',
-    coachCalmHigh: 'מצב רגוע: הסיכון גבוה יותר. שמרו ציוד לידכם וכוונו ל-{time}.',
-    coachStrictLow: 'מצב קשוח: תנאים סבירים. בצעו שנ"צ קצר ב-{time}.',
-    coachStrictHigh: 'מצב קשוח: בלי טעויות. קודם מוכנות, ואז בדיקה מחדש ב-{time}.',
-    coachOffline: 'הסוקט החי כרגע לא מחובר.',
-    napDone: 'השנ"צ הסתיים. לקום אלופה.',
-    napStarted: 'שומר שנ"צ הופעל ל-{minutes} דקות.',
-    wakeupFunny: 'לקום וקדימה: {title}',
-    wakeupCalm: 'נא לקום ברוגע: {title}',
-    wakeupStrict: 'לקום עכשיו: {title}',
-    pasteApiKey: 'יש להדביק מפתח API כדי להתחבר לפרודקשן.',
-    geoUnsupported: 'המכשיר או הדפדפן לא תומך במיקום.',
-    shelterGettingLocation: 'מאתר את המיקום שלך...',
-    shelterPressButton: 'לחצו על הכפתור כדי להתחיל חיפוש.',
-    shelterNoResults: 'לא נמצאו מקלטים לחיפוש הזה.',
-    shelterFound: 'נמצאו {count} מקלטים קרובים.',
-    shelterFailed: 'החיפוש נכשל.',
-    shelterPermission: 'לא ניתנה הרשאת מיקום.',
-    openMap: 'פתחו במפה',
-    unknownAddress: 'כתובת לא ידועה',
-    unknownType: 'לא ידוע',
-    statusCopied: 'דוח המצב הועתק.',
-    statusCopyFailed: 'לא ניתן להעתיק בדפדפן הזה.',
-    bestNapStarts: 'זמן השנ"צ הטוב מתחיל ב-{time}.',
-    noNapWindows: 'עדיין אין חלונות שנ"צ.',
-    couldNotLoadHistory: 'לא הצלחנו לטעון היסטוריית התראות מהשרת המקומי.',
-    couldNotLoadSummary: 'לא הצלחנו לטעון נתוני סיכום מהשרת המקומי.'
+    appName: 'להביא קפה?',
+    heroLabel: 'בדיקת יציאה בזמן אמת',
+    heroDesc: 'מזינים מוצא ויעד ומקבלים תשובה אחת ברורה: לצאת עכשיו או לחכות.',
+    purposeLine: 'מטרה: להבין תוך שניות אם כדאי לצאת עכשיו.',
+    feature1: '1. בוחרים מוצא ויעד',
+    feature2: '2. בוחרים זמן ואמצעי',
+    feature3: '3. מקבלים החלטה ברורה',
+    feature4: '',
+    routeTitle: 'כדאי לצאת עכשיו?',
+    routeSubtitle: 'כמה שדות, תשובה ברורה.',
+    fromLabel: 'מעיר',
+    toLabel: 'אל עיר',
+    durationLabel: 'סוג נסיעה',
+    durShort: 'קצרה',
+    durStandard: 'רגילה',
+    durLong: 'ארוכה',
+    modeLabel: 'אמצעי נסיעה',
+    modeFoot: 'רגלי',
+    modeBike: 'אופניים',
+    modeScooter: 'קורקינט',
+    modeCar: 'רכב',
+    goBtn: 'לצאת?',
+    contextTitle: 'הקשר מהיר',
+    originPressureLabel: 'לחץ בעיר המוצא',
+    recentWindowLabel: 'חלון התרעה אחרון',
+    shelterSpeedLabel: 'מהירות הגעה למקלט',
+    routeScoreLabel: 'ציון מסלול',
+    stressMeterLabel: 'מד לחץ',
+    shareBtn: 'שיתוף',
+    saveBtn: 'שמירה',
+    originShelterTitle: 'מקלט בצד היציאה',
+    destinationShelterTitle: 'מקלט בצד היעד',
+    timelineTitle: 'ציר התרעות',
+    timelineSubtitle: 'התפתחות לפי שעה',
+    timelineTotalFmt: 'סה״כ: {count}',
+    timelinePeakFmt: 'שעת שיא: {hour}',
+    timelineNowFmt: 'עכשיו: {count}',
+    timelineNowAtFmt: 'עכשיו: {time}',
+    timelineDetailFmt: '{hour} • {count} התרעות',
+    shareSmall: 'להביא קפה?',
+    fromPlaceholder: 'תל אביב',
+    toPlaceholder: 'רמת גן',
+    verdictPending: 'ממתין לפסק',
+    initialVerdictTitle: 'בחרו מסלול ולחצו על הכפתור',
+    initialVerdictSubtitle: 'תשובה קודם, הסבר אחר כך.',
+    initialPunchline: 'כרגע לא צפוי מינגלינג במקלט.',
+    initialMeta: 'פרטי המסלול יופיעו כאן.',
+    initialShelter: 'פרטי מקלט קרוב יופיעו אחרי חישוב.',
+    initialShareRoute: 'תל אביב -> רמת גן • 20 דק׳ בקורקינט',
+    initialShareVerdict: 'כנראה סבבה',
+    initialSharePunchline: 'קפה אופציונלי, ביטחון לא.',
+    liveDataRequired: 'נדרש מידע חי. הפעילו את שרת ה-API ובדקו את מפתח ה-API.',
+    liveDataLoaded: 'התחברות למידע חי הצליחה.',
+    liveNoSummary: 'מידע חי זמין (נתוני סיכום זמנית לא זמינים).',
+    runCheckFirstShare: 'קודם הריצו בדיקת מסלול ואז שתפו.',
+    runCheckFirstSave: 'קודם הריצו בדיקת מסלול ואז שמרו.',
+    shareCopied: 'טקסט השיתוף הועתק ללוח.',
+    shareCopyFail: 'לא ניתן להעתיק בדפדפן הזה.',
+    saved: 'המסלול נשמר מקומית.',
+    missingCities: 'בחרו גם מוצא וגם יעד.',
+    unknownCities: 'בחרו עיר מתוך ההשלמה כדי לקבל ציון אמין.',
+    routeMetaFmt: '{from} -> {to} | {mode} | מודל ברמת עיר',
+    recentAgoFmt: 'לפני {minutes} דק׳',
+    shelterAvgFmt: 'ממוצע {minutes} דק׳',
+    shelterLineFmt: '{side}: מקלט קרוב במרחק כ-{eta} דק׳. {rate}. התרעה אחרונה לפני כ-{minutes} דק׳.',
+    sidePickup: 'יציאה',
+    sideDropoff: 'יעד',
+    lowLocal: 'שיבוש מקומי נמוך',
+    moderateLocal: 'שיבוש מקומי בינוני',
+    highLocal: 'שיבוש מקומי גבוה',
+    highLocal: 'שיבוש מקומי גבוה',
+    shelterSearchTitle: 'חיפוש מקלטים קרובים',
+    shelterSearchPlaceholder: 'חפש לפי עיר...',
+    searchBtn: 'חפש',
+    nearMeBtn: 'קרוב אליי',
+    shelterEmptyMsg: 'חפש עיר או השתמש במיקום שלך כדי למצוא מקלטים בסביבה.',
+    shelterLoading: 'מחפש מקלטים...',
+    shelterNone: 'לא נמצאו מקלטים באזור זה.',
+    shelterOfficial: 'רשמי',
+    shelterAccessible: 'נגיש',
+    leaderboardTitle: 'הערים המטווחות ביותר (24 שעות)',
+    routeStatsTitle: 'נתוני התרעות לעיר',
+    thCity: 'עיר',
+    th24h: '24 שעות',
+    thWar: 'מלחמה',
+    statsError: 'כישלון בטעינת סטטיסטיקה',
+    statsNoData: 'אין נתונים זמינים',
+    leaderboardCount: '{count} התרעות',
+    loading: 'טוען...',
+    verdicts: {
+      send: {
+        label: 'יאללה צאו',
+        subtitle: 'לחץ נמוך וסיכוי נמוך לשיבוש.',
+        punchlines: ['לא צפוי נטוורקינג במקלט.', 'קפה אופציונלי, ביטחון לא.']
+      },
+      fine: {
+        label: 'כנראה סבבה',
+        subtitle: 'בסך הכל תקין, עם מעט זהירות.',
+        punchlines: ['מרגיש כמו סידור רגיל עם תוכנית גיבוי.', 'יש קצת אי ודאות, אבל לגמרי עירוני.']
+      },
+      spicy: {
+        label: 'קצת פיקנטי',
+        subtitle: 'אי ודאות בינונית. עלול להיות לא נוח.',
+        punchlines: ['למסלול הזה יש פוטנציאל לעלילה.', 'לא אבוד, פשוט דרמטי.']
+      },
+      coffee: {
+        label: 'תביאו קפה',
+        subtitle: 'סיכון גבוה יותר לשיבוש. תתכוננו מנטלית.',
+        punchlines: ['פחות שליחות מהירה, יותר פרק מתפתח.', 'קחו קפה והנמיכו ציפיות.']
+      },
+      shelter: {
+        label: 'וייבים של מקלט',
+        subtitle: 'לחץ מסלול גבוה. עדיף לשקול תזמון מחדש.',
+        punchlines: ['לנסיעה הזו יש אנרגיה של שיחת מסדרון במקלט.', 'אתם לא מאחרים, אתם אסטרטגיים.']
+      }
+    }
   }
 };
 
-const state = {
-  lang: 'en',
-  napDurationMinutes: 15,
-  historyDates: [],
-  hourlyRisk: new Array(24).fill(1),
-  napWindows: [],
-  coachMode: 'funny',
-  selectedWindowIndex: null,
-  napTimerId: null,
-  napEndAt: null,
-  sheltersFound: 0,
-  cityStats: [],
-  summarySnapshot: null,
-  checklist: {
-    water: false,
-    phone: false,
-    shoes: false
-  },
-  socket: null,
-  liveConnected: false,
-  charts: {
-    napWindowChart: null,
-    timelineChart: null
-  }
-};
-
-const $ = (selector) => document.querySelector(selector);
-
-const els = {
-  langEnBtn: $('#lang-en-btn'),
-  langHeBtn: $('#lang-he-btn'),
-  livePill: $('#live-pill'),
-  apiKeyInput: $('#api-key-input'),
-  connectProdBtn: $('#connect-prod-btn'),
-  napDurationRow: $('#nap-duration-row'),
-  startNapBtn: $('#start-nap-btn'),
-  stopNapBtn: $('#stop-nap-btn'),
-  napTimer: $('#nap-timer'),
-  riskScore: $('#risk-score'),
-  bestNapTime: $('#best-nap-time'),
-  alerts24h: $('#alerts-24h'),
-  peakPeriod: $('#peak-period'),
-  coachModeRow: $('#coach-mode-row'),
-  coachLine: $('#coach-line'),
-  quickBestNap: $('#quick-best-nap'),
-  quickFindShelter: $('#quick-find-shelter'),
-  quickCopyReport: $('#quick-copy-report'),
-  checkWater: $('#check-water'),
-  checkPhone: $('#check-phone'),
-  checkShoes: $('#check-shoes'),
-  prepFill: $('#prep-fill'),
-  prepScore: $('#prep-score'),
-  prepJoke: $('#prep-joke'),
-  routeFrom: $('#route-from'),
-  routeTo: $('#route-to'),
-  routeMinutes: $('#route-minutes'),
-  routeMode: $('#route-mode'),
-  cityOptions: $('#city-options'),
-  checkRouteBtn: $('#check-route-btn'),
-  routeUseBestBtn: $('#route-use-best-btn'),
-  routeVerdictCard: $('#route-verdict-card'),
-  routeVerdictTitle: $('#route-verdict-title'),
-  routeVerdictReason: $('#route-verdict-reason'),
-  routeDetails: $('#route-details'),
-  pickedWindow: $('#picked-window'),
-  findShelterBtn: $('#find-shelter-btn'),
-  wheelchairOnly: $('#wheelchair-only'),
-  shelterStatus: $('#shelter-status'),
-  shelterResults: $('#shelter-results'),
-  liveFeedList: $('#live-feed-list'),
-  toast: $('#toast')
-};
-
-function showToast(text) {
-  els.toast.textContent = text;
-  els.toast.classList.add('show');
-  window.setTimeout(() => els.toast.classList.remove('show'), 3500);
+function t(key, params = {}) {
+  const template = I18N[state.lang][key] ?? I18N.en[key] ?? key;
+  return template.replace(/\{(\w+)\}/g, (_, token) => String(params[token] ?? `{${token}}`));
 }
 
-function addFeedItem(text, isDanger = false) {
-  const li = document.createElement('li');
-  li.textContent = text;
-  if (isDanger) li.style.borderColor = 'rgba(251, 113, 133, 0.6)';
-  els.liveFeedList.prepend(li);
-  while (els.liveFeedList.children.length > 20) {
-    els.liveFeedList.removeChild(els.liveFeedList.lastElementChild);
-  }
-}
-
-function parseDate(raw) {
-  const candidate = raw?.timestamp ?? raw;
-  const d = new Date(candidate);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatHour(date) {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
-function t(key, vars = {}) {
-  const dict = I18N[state.lang] || I18N.en;
-  const template = dict[key] || I18N.en[key] || key;
+function formatTpl(template, vars) {
   return template.replace(/\{(\w+)\}/g, (_, token) => String(vars[token] ?? ''));
 }
 
-function setText(id, value) {
-  const node = document.getElementById(id);
-  if (node) node.textContent = value;
+function getVerdictCopy(verdictKey) {
+  return I18N[state.lang].verdicts[verdictKey] || I18N.en.verdicts[verdictKey];
 }
 
-function applyStaticTranslations() {
+function getSelectedModeLabel() {
+  const modeMap = {
+    foot: t('modeFoot'),
+    bike: t('modeBike'),
+    scooter: t('modeScooter'),
+    car: t('modeCar')
+  };
+  return modeMap[state.mode] || state.mode;
+}
+
+function applyLanguageUI() {
+  const set = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = value;
+  };
+
   document.documentElement.lang = state.lang;
   document.documentElement.dir = state.lang === 'he' ? 'rtl' : 'ltr';
 
-  setText('txt-eyebrow', t('eyebrow'));
-  setText('txt-title', t('title'));
-  setText('txt-sub', t('sub'));
-  setText('txt-api-key-label', t('apiKeyLabel'));
-  setText('txt-nap-duration', t('napDuration'));
-  setText('txt-nap-guard', t('napGuard'));
-  setText('txt-kpi-risk', t('kpiRisk'));
-  setText('txt-kpi-best-nap', t('kpiBestNap'));
-  setText('txt-kpi-alerts', t('kpiAlerts'));
-  setText('txt-kpi-peak', t('kpiPeak'));
-  setText('txt-coach-title', t('coachTitle'));
-  setText('txt-coach-sub', t('coachSub'));
-  setText('txt-ready-title', t('readyTitle'));
-  setText('txt-ready-sub', t('readySub'));
-  setText('txt-check-water', t('checkWater'));
-  setText('txt-check-phone', t('checkPhone'));
-  setText('txt-check-shoes', t('checkShoes'));
-  setText('txt-chart-nap-title', t('chartNapTitle'));
-  setText('txt-chart-nap-sub', t('chartNapSub'));
-  setText('txt-chart-timeline-title', t('chartTimelineTitle'));
-  setText('txt-chart-timeline-sub', t('chartTimelineSub'));
-  setText('txt-shelter-title', t('shelterTitle'));
-  setText('txt-shelter-sub', t('shelterSub'));
-  setText('txt-wheelchair-only', t('wheelchairOnly'));
-  setText('txt-feed-title', t('feedTitle'));
-  setText('txt-feed-sub', t('feedSub'));
+  els.langEn.classList.toggle('active', state.lang === 'en');
+  els.langHe.classList.toggle('active', state.lang === 'he');
 
-  els.apiKeyInput.placeholder = t('apiKeyPlaceholder');
-  els.connectProdBtn.textContent = t('connectProd');
-  els.startNapBtn.textContent = t('startNap');
-  els.stopNapBtn.textContent = t('stopNap');
-  els.quickBestNap.textContent = t('quickBestNap');
-  els.quickFindShelter.textContent = t('quickFindShelter');
-  els.quickCopyReport.textContent = t('quickCopyReport');
-  els.findShelterBtn.textContent = t('findShelter');
+  set('app-name', t('appName'));
+  set('hero-label', t('heroLabel'));
+  set('hero-desc', t('heroDesc'));
+  set('purpose-line', t('purposeLine'));
+  set('feature-1', t('feature1'));
+  set('feature-2', t('feature2'));
+  set('feature-3', t('feature3'));
+  set('feature-4', t('feature4'));
+  set('route-title', t('routeTitle'));
+  set('route-subtitle', t('routeSubtitle'));
+  set('from-label', t('fromLabel'));
+  set('to-label', t('toLabel'));
+  set('duration-label', t('durationLabel'));
+  set('mode-label', t('modeLabel'));
+  set('mode-foot', t('modeFoot'));
+  set('mode-bike', t('modeBike'));
+  set('mode-scooter', t('modeScooter'));
+  set('mode-car', t('modeCar'));
+  set('go-btn', t('goBtn'));
+  set('context-title', t('contextTitle'));
+  set('origin-pressure-label', t('originPressureLabel'));
+  set('recent-window-label', t('recentWindowLabel'));
+  set('shelter-speed-label', t('shelterSpeedLabel'));
+  set('route-score-label', t('routeScoreLabel'));
+  set('stress-meter-label', t('stressMeterLabel'));
+  set('share-btn', t('shareBtn'));
+  set('save-btn', t('saveBtn'));
+  set('origin-shelter-title', t('originShelterTitle'));
+  set('destination-shelter-title', t('destinationShelterTitle'));
+  set('timeline-title', t('timelineTitle'));
+  set('timeline-subtitle', t('timelineSubtitle'));
+  set('share-small', t('shareSmall'));
 
-  const modeButtons = els.coachModeRow.querySelectorAll('button[data-mode]');
-  modeButtons.forEach((button) => {
-    const mode = button.dataset.mode;
-    if (mode === 'funny') button.textContent = t('modeFunny');
-    if (mode === 'calm') button.textContent = t('modeCalm');
-    if (mode === 'strict') button.textContent = t('modeStrict');
-  });
+  // Keep Hebrew hint text on startup; language can still be switched later.
+  els.fromInput.placeholder = state.lang === 'he' ? I18N.he.fromPlaceholder : t('fromPlaceholder');
+  els.toInput.placeholder = state.lang === 'he' ? I18N.he.toPlaceholder : t('toPlaceholder');
 
-  els.livePill.textContent = t('feedConnecting');
-}
-
-function loadLanguage() {
-  if (!storageAvailable()) return;
-  const saved = window.localStorage.getItem('nap_guard_lang');
-  if (saved === 'he' || saved === 'en') {
-    state.lang = saved;
+  if (!state.lastResult) {
+    set('status-pill', t('verdictPending'));
+    set('verdict-title', t('initialVerdictTitle'));
+    set('verdict-subtitle', t('initialVerdictSubtitle'));
+    set('punchline', t('initialPunchline'));
+    set('route-meta', t('initialMeta'));
+    set('origin-shelter', t('initialShelter'));
+    set('destination-shelter', t('initialShelter'));
+    set('share-verdict', t('initialShareVerdict'));
+    set('share-route', t('initialShareRoute'));
+    set('share-punchline', t('initialSharePunchline'));
   }
+  set('dur-short', t('durShort'));
+  set('dur-standard', t('durStandard'));
+  set('dur-long', t('durLong'));
+
+  set('timeline-title', t('timelineTitle'));
+  set('shelter-search-title', t('shelterSearchTitle'));
+  const sInput = document.getElementById('shelter-city-input');
+  if (sInput) sInput.placeholder = t('shelterSearchPlaceholder');
+  set('search-shelter-btn', t('searchBtn'));
+  set('shelter-empty-msg', t('shelterEmptyMsg'));
+
+  set('leaderboard-title', t('leaderboardTitle'));
+  set('route-stats-title', t('routeStatsTitle'));
+  set('th-city', t('thCity'));
+  set('th-24h', t('th24h'));
+  set('th-war', t('thWar'));
+
+  renderHourlyAlertTimeline(state.timelineBuckets);
+  fetchStatsLeaderboard();
 }
 
-function saveLanguage() {
-  if (!storageAvailable()) return;
-  window.localStorage.setItem('nap_guard_lang', state.lang);
-}
+function renderHourlyAlertTimeline(source = []) {
+  const chart = document.getElementById('alerts-chart');
+  const summary = document.getElementById('timeline-summary');
+  const detail = document.getElementById('timeline-detail');
+  if (!chart) return;
 
-function syncLanguageButtons() {
-  const isEnglish = state.lang === 'en';
-  els.langEnBtn.classList.toggle('active', isEnglish);
-  els.langEnBtn.classList.toggle('ghost', !isEnglish);
-  els.langHeBtn.classList.toggle('active', !isEnglish);
-  els.langHeBtn.classList.toggle('ghost', isEnglish);
-}
+  const nowTs = Date.now();
+  const rangeMs = state.timelineRangeHours * 3600000;
+  const intervalMs = rangeMs / 24;
 
-function storageAvailable() {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-}
-
-function loadChecklist() {
-  if (!storageAvailable()) return;
-  const raw = window.localStorage.getItem('nap_guard_checklist');
-  if (!raw) return;
-  try {
-    const parsed = JSON.parse(raw);
-    state.checklist = {
-      water: Boolean(parsed.water),
-      phone: Boolean(parsed.phone),
-      shoes: Boolean(parsed.shoes)
-    };
-  } catch (_error) {
-    // Ignore malformed local storage payload.
-  }
-}
-
-function saveChecklist() {
-  if (!storageAvailable()) return;
-  window.localStorage.setItem('nap_guard_checklist', JSON.stringify(state.checklist));
-}
-
-function loadSavedApiKey() {
-  if (!storageAvailable()) return;
-  const key = window.localStorage.getItem('nap_guard_api_key') || '';
-  if (key) {
-    els.apiKeyInput.value = key;
-  }
-}
-
-function saveApiKey() {
-  if (!storageAvailable()) return;
-  const key = els.apiKeyInput.value.trim();
-  if (key) {
-    window.localStorage.setItem('nap_guard_api_key', key);
+  let buckets = new Array(24).fill(0);
+  if (source.length === 24 && source.every(v => typeof v === 'number')) {
+    buckets = [...source];
   } else {
-    window.localStorage.removeItem('nap_guard_api_key');
-  }
-}
+    const entries = Array.isArray(source) ? source : [];
+    for (const item of entries) {
+      const ts = item?.timestamp || item?.time || item?.createdAt || item;
+      const date = new Date(ts);
+      if (Number.isNaN(date.getTime())) continue;
 
-function updateBackgroundInteractivity() {
-  document.addEventListener('pointermove', (event) => {
-    const x = (event.clientX / window.innerWidth) * 100;
-    const y = (event.clientY / window.innerHeight) * 100;
-    document.documentElement.style.setProperty('--x', `${x}%`);
-    document.documentElement.style.setProperty('--y', `${y}%`);
-  });
-}
+      const msAgo = nowTs - date.getTime();
+      if (msAgo < 0 || msAgo > rangeMs) continue;
 
-async function loadHistory() {
-  const response = await fetch(CONFIG.HISTORY_URL);
-  if (!response.ok) {
-    throw new Error('Failed to fetch history');
-  }
-  const data = await response.json();
-  state.historyDates = (Array.isArray(data) ? data : [])
-    .map(parseDate)
-    .filter(Boolean)
-    .sort((a, b) => a - b);
-}
-
-function buildHourlyRiskFromHistory() {
-  const counts = new Array(24).fill(0);
-  for (const date of state.historyDates) {
-    counts[date.getHours()] += 1;
-  }
-  const maxCount = Math.max(...counts, 1);
-  state.hourlyRisk = counts.map((count) => Math.max(1, Math.round((count / maxCount) * 100)));
-}
-
-function computeNapWindows() {
-  const now = new Date();
-  const windows = [];
-
-  for (let i = 0; i < 12; i += 1) {
-    const start = new Date(now.getTime() + i * 60 * 60 * 1000);
-    const slotCount = Math.max(1, Math.ceil(state.napDurationMinutes / 60));
-    let total = 0;
-
-    for (let slot = 0; slot < slotCount; slot += 1) {
-      const h = (start.getHours() + slot) % 24;
-      total += state.hourlyRisk[h];
+      const bucketIdx = Math.floor(msAgo / intervalMs);
+      const bucket = Math.max(0, Math.min(23, 23 - bucketIdx));
+      buckets[bucket] += 1;
     }
-
-    const avgRisk = Math.round(total / slotCount);
-    const safety = Math.max(1, 100 - avgRisk);
-    windows.push({ start, avgRisk, safety });
   }
+  state.timelineBuckets = buckets;
 
-  state.napWindows = windows;
-  const best = windows.reduce((acc, entry) => (entry.safety > acc.safety ? entry : acc), windows[0]);
-  if (best) {
-    els.bestNapTime.textContent = `${formatHour(best.start)} (${t('safetyUnit', { score: best.safety })})`;
-  }
-}
+  const max = Math.max(1, ...buckets);
+  const total = buckets.reduce((sum, n) => sum + n, 0);
 
-function currentRiskScore() {
-  const hour = new Date().getHours();
-  return state.hourlyRisk[hour] ?? 0;
-}
+  const peak = buckets.reduce((acc, val, idx) => (val > acc.val ? { val, idx } : acc), { val: -1, idx: 0 });
+  const nowObj = new Date();
+  const nowHour = nowObj.getHours();
+  const nowMinute = nowObj.getMinutes();
 
-function getBestWindow() {
-  if (!state.napWindows.length) return null;
-  return state.napWindows.reduce((acc, entry, idx) => {
-    if (!acc || entry.safety > acc.entry.safety) return { entry, idx };
-    return acc;
-  }, null);
-}
-
-async function loadSummaryStats() {
-  const response = await fetch(`${CONFIG.SUMMARY_URL}?include=timeline,peak&timelineGroup=day`);
-  if (!response.ok) {
-    throw new Error('Failed to fetch summary');
-  }
-  const summary = await response.json();
-  state.summarySnapshot = summary;
-  els.alerts24h.textContent = String(summary?.totals?.last24h ?? '--');
-  els.peakPeriod.textContent = summary?.peak?.period ?? '--';
-  return summary;
-}
-
-async function loadCityStats() {
-  const response = await fetch(`${CONFIG.CITIES_URL}?limit=500`);
-  if (!response.ok) {
-    throw new Error('Failed to fetch city stats');
-  }
-  const data = await response.json();
-  state.cityStats = Array.isArray(data) ? data : [];
-  els.cityOptions.innerHTML = state.cityStats
-    .map((entry) => `<option value="${entry.city}"></option>`)
-    .join('');
-}
-
-function findCityRisk(cityName) {
-  if (!cityName) return null;
-  const found = state.cityStats.find((entry) => String(entry.city).trim() === cityName.trim());
-  if (!found) return null;
-
-  const max = Math.max(...state.cityStats.map((entry) => Number(entry.count) || 0), 1);
-  const risk = Math.round(((Number(found.count) || 0) / max) * 100);
-  return { risk, zone: found.cityZone || '--', count: Number(found.count) || 0 };
-}
-
-function verdictForScore(score) {
-  if (score < 25) {
-    return {
-      label: 'Send it',
-      joke: 'Low drama route. Deliver first, coffee after.',
-      level: 'safe'
-    };
-  }
-  if (score < 45) {
-    return {
-      label: 'Probably fine',
-      joke: 'Could go either way. Keep coffee nearby.',
-      level: 'safe'
-    };
-  }
-  if (score < 65) {
-    return {
-      label: 'A bit spicy',
-      joke: 'Not impossible. Not elegant.',
-      level: 'warn'
-    };
-  }
-  if (score < 82) {
-    return {
-      label: 'Bring coffee',
-      joke: 'High chance this turns into a shelter handoff.',
-      level: 'danger'
-    };
-  }
-  return {
-    label: 'Shelter date likely',
-    joke: 'This is not a dropoff. This is an adventure.',
-    level: 'danger'
+  const bucketHourAt = (idx) => {
+    const msOffset = (23 - idx) * (state.timelineRangeHours * 3600000 / 24);
+    const date = new Date(Date.now() - msOffset);
+    return date.getHours();
   };
-}
+  const fmtHour = (h) => `${String(h).padStart(2, '0')}:00`;
+  const fmtTimeShort = (idx) => {
+    const msOffset = (23 - idx) * intervalMs;
+    const date = new Date(nowTs - msOffset);
+    return date.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
+  };
+  const nowTimeLabel = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
 
-function runRouteCheck() {
-  const from = els.routeFrom.value.trim();
-  const to = els.routeTo.value.trim();
-  const minutes = Math.max(1, Number(els.routeMinutes.value) || 20);
-  const mode = els.routeMode.value;
+  const w = 960;
+  const h = 180;
+  const padX = 24;
+  const padTop = 14;
+  const padBottom = 18;
+  const innerW = w - padX * 2;
+  const innerH = h - padTop - padBottom;
+  const stepX = innerW / 23;
 
-  if (!from || !to) {
-    showToast('Enter both origin and destination cities.');
-    return;
-  }
+  const points = buckets.map((count, idx) => {
+    const x = padX + (idx * stepX);
+    const y = padTop + innerH - ((count / max) * innerH);
+    return { x, y, idx, count, hour: bucketHourAt(idx) };
+  });
 
-  const fromRisk = findCityRisk(from);
-  const toRisk = findCityRisk(to);
-  if (!fromRisk || !toRisk) {
-    showToast('City not found in current RedAlert city stats. Try exact city names from suggestions.');
-    return;
-  }
+  const severityByRatio = (ratio) => {
+    if (ratio < 0.25) return 'sev-low';
+    if (ratio < 0.5) return 'sev-medium';
+    if (ratio < 0.75) return 'sev-high';
+    return 'sev-critical';
+  };
 
-  const modeFactor = {
-    scooter: 1.15,
-    bike: 1.1,
-    car: 0.95,
-    foot: 1.25
-  }[mode] || 1;
+  const linePath = points.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+  const areaPath = `M ${points[0].x.toFixed(2)} ${padTop + innerH} L ${points
+    .map((p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+    .join(' L ')} L ${points[points.length - 1].x.toFixed(2)} ${padTop + innerH} Z`;
 
-  const durationFactor = 1 + Math.min(minutes, 120) / 180;
-  const recentBoost = Math.min(30, Number(state.summarySnapshot?.totals?.last24h || 0) / 20);
-  const base = (fromRisk.risk + toRisk.risk) / 2;
-  const routeScore = Math.max(1, Math.min(99, Math.round(base * modeFactor * durationFactor * 0.7 + recentBoost * 0.3)));
-  const verdict = verdictForScore(routeScore);
+  const nowX = points[23].x;
 
-  els.routeVerdictCard.classList.remove('safe', 'warn', 'danger');
-  els.routeVerdictCard.classList.add(verdict.level);
-  els.routeVerdictTitle.textContent = `${verdict.label} (${routeScore}%)`;
-  els.routeVerdictReason.textContent = verdict.joke;
-
-  const lines = [
-    `Route: ${from} -> ${to}`,
-    `Trip estimate: ${minutes} min by ${mode}`,
-    `Origin zone: ${fromRisk.zone} | Destination zone: ${toRisk.zone}`,
-    `Recent alerts (24h): ${state.summarySnapshot?.totals?.last24h ?? '--'}`,
-    'If alert now: hit "Nearest shelter now" for immediate fallback.'
-  ];
-  els.routeDetails.innerHTML = lines.map((line) => `<div>${line}</div>`).join('');
-}
-
-function createCharts(summaryTimeline = []) {
-  Chart.defaults.color = COLORS.text;
-  Chart.defaults.borderColor = COLORS.grid;
-  Chart.defaults.font.family = "'Space Grotesk', sans-serif";
-
-  const napCtx = $('#napWindowChart').getContext('2d');
-  state.charts.napWindowChart = new Chart(napCtx, {
-    type: 'bar',
-    data: {
-      labels: [],
-      datasets: [{
-        label: t('chartNapTitle'),
-        data: [],
-        backgroundColor: []
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label(context) {
-              return t('safetyUnit', { score: context.raw });
-            }
-          }
-        }
-      },
-      onClick(_event, elements) {
-        if (!elements.length) return;
-        state.selectedWindowIndex = elements[0].index;
-        renderNapWindowSelection();
-      },
-      scales: {
-        y: {
-          min: 0,
-          max: 100
-        }
-      }
+  const axisLabels = [0, 6, 12, 18, 23].map((idx) => {
+    // If range is large (>= 12h), show clean hours. If small, show precise time.
+    if (state.timelineRangeHours >= 12) {
+      return fmtHour(bucketHourAt(idx));
     }
+    return fmtTimeShort(idx);
   });
 
-  const timelineCtx = $('#timelineChart').getContext('2d');
-  state.charts.timelineChart = new Chart(timelineCtx, {
-    type: 'line',
-    data: {
-      labels: summaryTimeline.map((item) => item.period),
-      datasets: [{
-        label: t('feedTitle'),
-        data: summaryTimeline.map((item) => item.count),
-        borderColor: COLORS.line,
-        backgroundColor: 'rgba(34, 211, 238, 0.18)',
-        fill: true,
-        borderWidth: 2,
-        tension: 0.25,
-        pointRadius: 2
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {
-        intersect: false,
-        mode: 'index'
-      },
-      plugins: {
-        legend: { display: false }
-      },
-      scales: {
-        x: {
-          ticks: { maxRotation: 0 }
-        }
-      }
-    }
+  if (summary) {
+    summary.innerHTML = `
+      <span class="timeline-chip">${formatTpl(t('timelineTotalFmt'), { count: total })}</span>
+      <span class="timeline-chip">${formatTpl(t('timelinePeakFmt'), { hour: fmtHour(bucketHourAt(peak.idx)) })}</span>
+      <span class="timeline-chip">${formatTpl(t('timelineNowFmt'), { count: buckets[23] })}</span>
+      <span class="timeline-chip">${formatTpl(t('timelineNowAtFmt'), { time: nowTimeLabel })}</span>
+    `;
+  }
+
+  chart.innerHTML = `
+    <svg class="alerts-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <g class="alerts-grid">
+        <line x1="${padX}" y1="${padTop}" x2="${w - padX}" y2="${padTop}" />
+        <line x1="${padX}" y1="${padTop + innerH / 2}" x2="${w - padX}" y2="${padTop + innerH / 2}" />
+        <line x1="${padX}" y1="${padTop + innerH}" x2="${w - padX}" y2="${padTop + innerH}" />
+      </g>
+      <path class="alerts-area" d="${areaPath}" />
+      <polyline class="alerts-line" points="${linePath}" />
+      ${points.slice(0, -1).map((p, idx) => {
+        const next = points[idx + 1];
+        const avgRatio = ((p.count + next.count) / 2) / max;
+        const sev = severityByRatio(avgRatio);
+        return `<line class="alerts-segment ${sev}" x1="${p.x.toFixed(2)}" y1="${p.y.toFixed(2)}" x2="${next.x.toFixed(2)}" y2="${next.y.toFixed(2)}" />`;
+      }).join('')}
+      <line class="alerts-now-line" x1="${nowX}" y1="${padTop}" x2="${nowX}" y2="${padTop + innerH}" />
+      <text x="${nowX}" y="${padTop - 6}" class="alerts-now-label" text-anchor="middle" style="fill: #D99583; font-size: 10px; font-weight: 800;">NOW</text>
+      ${points.map((p) => {
+        const sev = severityByRatio(p.count / max);
+        const isActive = p.idx === state.timelineSelectedIndex;
+        return `<circle class="alerts-point ${sev} ${isActive ? 'active' : ''}" data-idx="${p.idx}" cx="${p.x.toFixed(2)}" cy="${p.y.toFixed(2)}" r="${isActive ? 5.5 : 4.2}" />`;
+      }).join('')}
+    </svg>
+    <div class="alerts-axis">
+      ${axisLabels.map((label) => `<span>${label}</span>`).join('')}
+    </div>
+  `;
+
+  const selectedIdx = Math.max(0, Math.min(23, state.timelineSelectedIndex));
+  const selectedTime = fmtTimeShort(selectedIdx);
+  const selectedPoint = points[selectedIdx];
+  const tooltipText = formatTpl(t('timelineDetailFmt'), {
+    hour: selectedTime,
+    count: buckets[selectedIdx]
   });
-}
-
-function updateNapWindowChart() {
-  if (!state.charts.napWindowChart) return;
-  const labels = state.napWindows.map((entry) => formatHour(entry.start));
-  const safetyValues = state.napWindows.map((entry) => entry.safety);
-  const colors = state.napWindows.map((entry, idx) => {
-    if (idx === state.selectedWindowIndex) return 'rgba(251, 146, 60, 0.9)';
-    return entry.safety >= 60 ? COLORS.barGood : COLORS.barRisk;
-  });
-
-  state.charts.napWindowChart.data.labels = labels;
-  state.charts.napWindowChart.data.datasets[0].data = safetyValues;
-  state.charts.napWindowChart.data.datasets[0].backgroundColor = colors;
-  state.charts.napWindowChart.update();
-}
-
-function refreshChartLanguage() {
-  if (state.charts.napWindowChart) {
-    state.charts.napWindowChart.data.datasets[0].label = t('chartNapTitle');
-    state.charts.napWindowChart.update();
-  }
-  if (state.charts.timelineChart) {
-    state.charts.timelineChart.data.datasets[0].label = t('feedTitle');
-    state.charts.timelineChart.update();
-  }
-}
-
-function renderNapWindowSelection() {
-  if (state.selectedWindowIndex == null || !state.napWindows[state.selectedWindowIndex]) {
-    els.pickedWindow.textContent = t('noWindowSelected');
-    updateNapWindowChart();
-    return;
-  }
-  const chosen = state.napWindows[state.selectedWindowIndex];
-  els.pickedWindow.textContent = t('selectedWindow', {
-    time: formatHour(chosen.start),
-    safety: chosen.safety,
-    risk: chosen.avgRisk
-  });
-  updateNapWindowChart();
-}
-
-function renderKpis() {
-  els.riskScore.textContent = `${currentRiskScore()}%`;
-}
-
-function updateCoachLine() {
-  const risk = currentRiskScore();
-  const best = getBestWindow();
-  const bestText = best ? formatHour(best.entry.start) : '--:--';
-  let line = '';
-
-  if (state.coachMode === 'calm') {
-    line = risk < 40
-      ? t('coachCalmLow', { time: bestText })
-      : t('coachCalmHigh', { time: bestText });
-  } else if (state.coachMode === 'strict') {
-    line = risk < 40
-      ? t('coachStrictLow', { time: bestText })
-      : t('coachStrictHigh', { time: bestText });
-  } else {
-    line = risk < 40
-      ? t('coachFunnyLow', { time: bestText })
-      : t('coachFunnyHigh', { time: bestText });
+  if (detail) {
+    detail.textContent = tooltipText;
   }
 
-  if (!state.liveConnected) {
-    line += ` ${t('coachOffline')}`;
-  }
+  const tooltip = document.createElement('div');
+  tooltip.className = 'timeline-tooltip';
+  tooltip.textContent = tooltipText;
+  tooltip.style.left = `${(selectedPoint.x / w) * 100}%`;
+  tooltip.style.top = `${(selectedPoint.y / h) * 100}%`;
+  chart.appendChild(tooltip);
 
-  els.coachLine.textContent = line;
-}
-
-function updatePrepUI() {
-  const values = Object.values(state.checklist);
-  const checked = values.filter(Boolean).length;
-  const percent = Math.round((checked / values.length) * 100);
-
-  els.checkWater.checked = state.checklist.water;
-  els.checkPhone.checked = state.checklist.phone;
-  els.checkShoes.checked = state.checklist.shoes;
-  els.prepFill.style.width = `${percent}%`;
-  els.prepScore.textContent = t('prepScore', { score: percent });
-
-  if (percent === 100) {
-    els.prepJoke.textContent = t('prepJokeMax');
-  } else if (percent >= 67) {
-    els.prepJoke.textContent = t('prepJokeHigh');
-  } else if (percent >= 34) {
-    els.prepJoke.textContent = t('prepJokeMid');
-  } else {
-    els.prepJoke.textContent = t('prepJokeLow');
-  }
-}
-
-function beep(times = 2) {
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!Ctx) return;
-  const audio = new Ctx();
-
-  for (let i = 0; i < times; i += 1) {
-    const osc = audio.createOscillator();
-    const gain = audio.createGain();
-    osc.frequency.value = 800;
-    osc.type = 'square';
-    osc.connect(gain);
-    gain.connect(audio.destination);
-
-    const start = audio.currentTime + i * 0.25;
-    gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(0.18, start + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
-    osc.start(start);
-    osc.stop(start + 0.2);
-  }
-}
-
-function stopNapGuard() {
-  if (state.napTimerId) {
-    clearInterval(state.napTimerId);
-    state.napTimerId = null;
-  }
-  state.napEndAt = null;
-  els.napTimer.textContent = '00:00';
-}
-
-function startNapGuard() {
-  stopNapGuard();
-  const now = Date.now();
-  state.napEndAt = now + state.napDurationMinutes * 60 * 1000;
-
-  state.napTimerId = setInterval(() => {
-    const remaining = Math.max(0, state.napEndAt - Date.now());
-    const minutes = Math.floor(remaining / 60000);
-    const seconds = Math.floor((remaining % 60000) / 1000);
-    els.napTimer.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-
-    if (remaining === 0) {
-      beep(3);
-      showToast(t('napDone'));
-      stopNapGuard();
-    }
-  }, 250);
-
-  showToast(t('napStarted', { minutes: state.napDurationMinutes }));
-}
-
-function setLivePill(isConnected, text) {
-  state.liveConnected = isConnected;
-  els.livePill.textContent = text;
-  els.livePill.style.borderColor = isConnected ? 'rgba(45, 212, 191, 0.35)' : 'rgba(251, 113, 133, 0.45)';
-  els.livePill.style.color = isConnected ? '#b8ffef' : '#ffd4dd';
-  updateCoachLine();
-}
-
-function handleIncomingAlerts(alertPayload) {
-  const alerts = Array.isArray(alertPayload) ? alertPayload : [alertPayload];
-  for (const alert of alerts) {
-    const title = alert?.title || alert?.type || 'Alert';
-    const cities = Array.isArray(alert?.cities) ? alert.cities.join(', ') : '';
-    const line = `${new Date().toLocaleTimeString()} | ${title}${cities ? ` | ${cities}` : ''}`;
-
-    addFeedItem(line, true);
-
-    if (state.napTimerId) {
-      beep(4);
-      if (state.coachMode === 'strict') showToast(t('wakeupStrict', { title }));
-      else if (state.coachMode === 'calm') showToast(t('wakeupCalm', { title }));
-      else showToast(t('wakeupFunny', { title }));
-    }
-  }
-}
-
-function connectSocket() {
-  if (state.socket) {
-    state.socket.disconnect();
-    state.socket = null;
-  }
-
-  const socketUrl = 'https://redalert.orielhaim.com';
-  const apiKey = els.apiKeyInput.value.trim();
-
-  if (!apiKey) {
-    setLivePill(false, t('feedNeedsKey'));
-    showToast(t('pasteApiKey'));
-    return;
-  }
-
-  saveApiKey();
-
-  const options = { auth: { apiKey } };
-
-  const socket = io(socketUrl, options);
-  state.socket = socket;
-
-  socket.on('connect', () => {
-    setLivePill(true, t('feedConnected'));
-    addFeedItem('Socket connected (production)');
-  });
-
-  socket.on('disconnect', () => {
-    setLivePill(false, t('feedDisconnected'));
-    addFeedItem('Socket disconnected');
-  });
-
-  socket.on('connect_error', (err) => {
-    setLivePill(false, t('feedConnectionError'));
-    addFeedItem(`Socket error: ${err.message}`);
-  });
-
-  socket.on('alert', handleIncomingAlerts);
-  socket.on('missiles', handleIncomingAlerts);
-  socket.on('earthQuake', handleIncomingAlerts);
-  socket.on('endAlert', (alert) => {
-    const title = alert?.title || 'End alert';
-    addFeedItem(`${new Date().toLocaleTimeString()} | ${title}`);
-  });
-}
-
-async function findShelters() {
-  if (!navigator.geolocation) {
-    showToast(t('geoUnsupported'));
-    return;
-  }
-
-  els.shelterStatus.textContent = t('shelterGettingLocation');
-  els.shelterResults.innerHTML = '';
-
-  navigator.geolocation.getCurrentPosition(
-    async (position) => {
-      try {
-        const { latitude, longitude } = position.coords;
-        const params = new URLSearchParams({
-          lat: String(latitude),
-          lon: String(longitude),
-          limit: '6'
-        });
-
-        if (els.wheelchairOnly.checked) {
-          params.set('wheelchairOnly', 'true');
-        }
-
-        const response = await fetch(`${CONFIG.SHELTER_SEARCH_URL}?${params.toString()}`);
-        const data = await response.json();
-        const results = Array.isArray(data?.results) ? data.results : [];
-
-        if (!results.length) {
-          els.shelterStatus.textContent = t('shelterNoResults');
-          state.sheltersFound = 0;
-          updateCoachLine();
-          return;
-        }
-
-        els.shelterStatus.textContent = t('shelterFound', { count: results.length });
-        state.sheltersFound = results.length;
-        updateCoachLine();
-        els.shelterResults.innerHTML = results.map((item) => {
-          const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.lat},${item.lon}`)}`;
-          const meters = Math.round(Number(item.distance_meters || 0));
-          const access = item.wheelchair_accessible ? 'wheelchair' : 'no-wheelchair';
-          return `
-            <article class="shelter-card">
-              <strong>${item.city || ''} | ${item.address || t('unknownAddress')}</strong>
-              <span class="shelter-meta">${meters}m away | ${item.shelter_type || t('unknownType')} | capacity: ${item.capacity ?? 'N/A'} | ${access}</span>
-              <a href="${mapUrl}" target="_blank" rel="noreferrer">${t('openMap')}</a>
-            </article>
-          `;
-        }).join('');
-      } catch (_error) {
-        els.shelterStatus.textContent = t('shelterFailed');
-      }
-    },
-    () => {
-      els.shelterStatus.textContent = t('shelterPermission');
-    },
-    { enableHighAccuracy: true, timeout: 8000 }
-  );
-}
-
-function bindEvents() {
-  els.apiKeyInput.addEventListener('change', saveApiKey);
-
-  els.langEnBtn.addEventListener('click', () => {
-    state.lang = 'en';
-    saveLanguage();
-    syncLanguageButtons();
-    applyStaticTranslations();
-    updateCoachLine();
-    updatePrepUI();
-    renderNapWindowSelection();
-    computeNapWindows();
-    refreshChartLanguage();
-  });
-
-  els.langHeBtn.addEventListener('click', () => {
-    state.lang = 'he';
-    saveLanguage();
-    syncLanguageButtons();
-    applyStaticTranslations();
-    updateCoachLine();
-    updatePrepUI();
-    renderNapWindowSelection();
-    computeNapWindows();
-    refreshChartLanguage();
-  });
-
-  els.napDurationRow.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-min]');
-    if (!button) return;
-
-    els.napDurationRow.querySelectorAll('button').forEach((item) => item.classList.remove('active'));
-    button.classList.add('active');
-    state.napDurationMinutes = Number(button.dataset.min);
-
-    computeNapWindows();
-    renderNapWindowSelection();
-    renderKpis();
-    updateCoachLine();
-  });
-
-  els.coachModeRow.addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-mode]');
-    if (!button) return;
-
-    state.coachMode = button.dataset.mode;
-    els.coachModeRow.querySelectorAll('button').forEach((item) => {
-      const isActive = item === button;
-      item.classList.toggle('active', isActive);
-      item.classList.toggle('ghost', !isActive);
+  chart.querySelectorAll('.alerts-point').forEach((point) => {
+    point.addEventListener('click', () => {
+      state.timelineSelectedIndex = Number(point.getAttribute('data-idx'));
+      renderHourlyAlertTimeline(state.timelineBuckets);
     });
-    updateCoachLine();
   });
 
-  const onChecklistChange = () => {
-    state.checklist.water = els.checkWater.checked;
-    state.checklist.phone = els.checkPhone.checked;
-    state.checklist.shoes = els.checkShoes.checked;
-    saveChecklist();
-    updatePrepUI();
-    updateCoachLine();
+  // Mouse wheel zoom
+  chart.onwheel = (e) => {
+    e.preventDefault();
+    const delta = e.deltaY;
+    const ranges = [6, 12, 24];
+    let curIdx = ranges.indexOf(state.timelineRangeHours);
+    if (delta > 0 && curIdx < ranges.length - 1) curIdx++;
+    if (delta < 0 && curIdx > 0) curIdx--;
+    const newRange = ranges[curIdx];
+    if (newRange !== state.timelineRangeHours) {
+      state.timelineRangeHours = newRange;
+      const zoomContainer = document.querySelector('#timeline-zoom');
+      if (zoomContainer) {
+        zoomContainer.querySelectorAll('.zoom-btn').forEach(b => {
+          b.classList.toggle('active', Number(b.dataset.hours) === newRange);
+        });
+      }
+      hydrateTimeline();
+    }
   };
+}
 
-  els.checkWater.addEventListener('change', onChecklistChange);
-  els.checkPhone.addEventListener('change', onChecklistChange);
-  els.checkShoes.addEventListener('change', onChecklistChange);
+async function fetchJsonWithFallback(path) {
+  const targets = [path, `${DIRECT_API_BASE}${path}`];
+  let lastError = null;
 
-  els.quickBestNap.addEventListener('click', () => {
-    const best = getBestWindow();
-    if (!best) {
-      showToast(t('noNapWindows'));
+  for (const target of targets) {
+    try {
+      const response = await fetch(target);
+      if (!response.ok) {
+        lastError = new Error(`HTTP ${response.status} at ${target}`);
+        continue;
+      }
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Failed to fetch live API data');
+}
+
+async function hydrateTimeline() {
+  try {
+    const data = await fetchJsonWithFallback('/api/alerts?limit=1500');
+    renderHourlyAlertTimeline(Array.isArray(data) ? data : []);
+  } catch (err) {
+    renderHourlyAlertTimeline([]);
+  }
+}
+
+function toast(message) {
+  els.toast.textContent = message;
+  els.toast.classList.add('show');
+  if (toastTimerId) {
+    window.clearTimeout(toastTimerId);
+  }
+  toastTimerId = window.setTimeout(() => {
+    els.toast.classList.remove('show');
+    toastTimerId = null;
+  }, 2600);
+}
+
+function pulseButton(button) {
+  button.classList.remove('pulse');
+  // Force reflow so repeated clicks retrigger the animation.
+  // eslint-disable-next-line no-unused-expressions
+  button.offsetHeight;
+  button.classList.add('pulse');
+  window.setTimeout(() => button.classList.remove('pulse'), 320);
+}
+
+function animateVerdictCard() {
+  els.verdictCard.classList.remove('is-refreshing');
+  // Force reflow to replay animation when verdict changes quickly.
+  // eslint-disable-next-line no-unused-expressions
+  els.verdictCard.offsetHeight;
+  els.verdictCard.classList.add('is-refreshing');
+  window.setTimeout(() => els.verdictCard.classList.remove('is-refreshing'), 420);
+}
+
+function normalizeCity(item) {
+  return {
+    city: String(item.city || item.name || '').trim(),
+    region: String(item.region || item.cityZone || item.zone || 'Unknown').trim(),
+    pressure: Math.max(4, Math.min(95, Number(item.pressure || item.count || 20))),
+    shelterEtaMin: Math.max(2, Math.min(12, Number(item.shelterEtaMin || 4))),
+    recentAlertsMinAgo: Math.max(4, Math.min(200, Number(item.recentAlertsMinAgo || 45)))
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function pickVerdict(score) {
+  return VERDICTS.find((item) => score >= item.min && score <= item.max) || VERDICTS[1];
+}
+
+function pickPunchline(verdict, score) {
+  const copy = getVerdictCopy(verdict.key);
+  const idx = score % copy.punchlines.length;
+  return copy.punchlines[idx];
+}
+
+function modeRiskFactor(mode) {
+  const factors = {
+    foot: 1.12,
+    bike: 1.08,
+    scooter: 1,
+    car: 0.92
+  };
+  return factors[mode] || 1;
+}
+
+function findCityByName(city) {
+  return state.allCities.find((item) => item.city.toLowerCase() === city.toLowerCase());
+}
+
+function buildShelterLine(cityObj, sideLabel) {
+  const eta = cityObj.shelterEtaMin;
+  const localRate = cityObj.pressure >= 65
+    ? t('highLocal')
+    : cityObj.pressure >= 40
+      ? t('moderateLocal')
+      : t('lowLocal');
+  return formatTpl(t('shelterLineFmt'), {
+    side: sideLabel,
+    eta,
+    rate: localRate,
+    minutes: cityObj.recentAlertsMinAgo
+  });
+}
+
+function renderResult(result) {
+  const { verdict, score, fromCity, toCity, fromObj, toObj, punchline, recentWindowMin } = result;
+  const copy = getVerdictCopy(verdict.key);
+
+  animateVerdictCard();
+
+  els.verdictCard.classList.remove('state-neutral', 'state-safe', 'state-caution', 'state-risk', 'state-alert');
+  els.verdictCard.classList.add(verdict.stateClass);
+  els.statusPill.textContent = copy.label;
+  els.verdictIcon.textContent = verdict.icon;
+  els.verdictTitle.textContent = copy.label;
+  els.verdictSubtitle.textContent = copy.subtitle;
+  els.punchline.textContent = punchline;
+  els.routeScore.textContent = `${score}/100`;
+  els.stressMeter.style.width = `${score}%`;
+
+  els.routeMeta.textContent = formatTpl(t('routeMetaFmt'), {
+    from: fromCity,
+    to: toCity,
+    duration: state.durationMin,
+    mode: getSelectedModeLabel()
+  });
+
+  els.originPressure.textContent = `${fromObj.pressure}/100`;
+  els.recentWindow.textContent = formatTpl(t('recentAgoFmt'), { minutes: recentWindowMin });
+  els.shelterSpeed.textContent = formatTpl(t('shelterAvgFmt'), {
+    minutes: Math.round((fromObj.shelterEtaMin + toObj.shelterEtaMin) / 2)
+  });
+
+  els.shareVerdict.textContent = copy.label;
+  els.shareRoute.textContent = `${fromCity} -> ${toCity} - ${state.durationMin}m by ${getSelectedModeLabel()}`;
+  els.sharePunchline.textContent = punchline;
+
+  updateVerdictMap(fromCity, toCity);
+  updateCoffeeIndicator(score);
+}
+
+function updateCoffeeIndicator(score) {
+  if (!els.coffeeIndicator) return;
+  
+  // 5 cups for very dangerous (score >= 80)
+  // 1 cup for safe (score < 20)
+  let count = 1;
+  if (score >= 80) count = 5;
+  else if (score >= 60) count = 4;
+  else if (score >= 40) count = 3;
+  else if (score >= 20) count = 2;
+
+  const cupEmoji = '☕';
+  els.coffeeIndicator.innerHTML = '';
+  for (let i = 0; i < count; i++) {
+    const span = document.createElement('span');
+    span.className = 'coffee-cup';
+    span.textContent = cupEmoji;
+    span.style.animationDelay = `${i * 0.1}s`;
+    els.coffeeIndicator.appendChild(span);
+  }
+}
+
+function calculateRoute() {
+  if (!state.liveDataReady || state.allCities.length < 8) {
+    toast(t('liveDataRequired'));
+    return null;
+  }
+
+  const fromCity = state.from.trim();
+  const toCity = state.to.trim();
+
+  if (!fromCity || !toCity) {
+    toast(t('missingCities'));
+    return null;
+  }
+
+  const fromObj = findCityByName(fromCity);
+  const toObj = findCityByName(toCity);
+
+  if (!fromObj || !toObj) {
+    toast(t('unknownCities'));
+    return null;
+  }
+
+  const routeBase = (fromObj.pressure * 0.25) + (toObj.pressure * 0.15);
+  const durationRisk = clamp((state.durationMin / 60) * 22, 2, 24);
+  const modeRisk = modeRiskFactor(state.mode);
+  const recentBoost = clamp((state.globalRecent24h / 40) * 14, 0, 14);
+  const shelterBuffer = clamp((7 - ((fromObj.shelterEtaMin + toObj.shelterEtaMin) / 2)) * 2, -8, 6);
+
+  const score = clamp(Math.round((routeBase + durationRisk + recentBoost - shelterBuffer) * modeRisk), 1, 99);
+  const verdict = pickVerdict(score);
+  const recentWindowMin = Math.min(fromObj.recentAlertsMinAgo, toObj.recentAlertsMinAgo);
+  const punchline = pickPunchline(verdict, score);
+
+  return {
+    verdict,
+    score,
+    fromCity,
+    toCity,
+    fromObj,
+    toObj,
+    recentWindowMin,
+    punchline,
+    timestamp: new Date().toISOString()
+  };
+}
+
+function suggestionsFor(query) {
+  const term = query.trim().toLowerCase();
+  const base = state.allCities;
+  if (!term) {
+    return base.slice(0, 8);
+  }
+  return base
+    .filter((item) => item.city.toLowerCase().includes(term) || item.region.toLowerCase().includes(term))
+    .slice(0, 8);
+}
+
+function renderSuggestions(target, items, which) {
+  if (!items.length) {
+    target.classList.remove('open');
+    target.innerHTML = '';
+    return;
+  }
+
+  target.innerHTML = items
+    .map((item) => `<button type="button" class="suggestion" data-which="${which}" data-city="${item.city}">${item.city} • ${item.region}</button>`)
+    .join('');
+  target.classList.add('open');
+}
+
+function setupAutocomplete(input, panel, which) {
+  input.addEventListener('focus', () => {
+    renderSuggestions(panel, suggestionsFor(input.value), which);
+  });
+
+  input.addEventListener('input', () => {
+    const value = input.value;
+    if (which === 'from') state.from = value;
+    if (which === 'to') state.to = value;
+    renderSuggestions(panel, suggestionsFor(value), which);
+  });
+
+  panel.addEventListener('click', (event) => {
+    const option = event.target.closest('.suggestion');
+    if (!option) return;
+
+    const selectedCity = option.dataset.city || '';
+    input.value = selectedCity;
+    if (which === 'from') state.from = selectedCity;
+    if (which === 'to') state.to = selectedCity;
+    panel.classList.remove('open');
+    panel.innerHTML = '';
+  });
+
+  input.addEventListener('blur', () => {
+    window.setTimeout(() => {
+      panel.classList.remove('open');
+      panel.innerHTML = '';
+    }, 120);
+  });
+}
+
+
+/** Statistics Logic **/
+async function displayRouteStats(origin, destination) {
+  const section = document.getElementById('route-stats-section');
+  const body = document.getElementById('route-stats-body');
+  if (!section || !body) return;
+
+  section.style.display = 'block';
+  body.innerHTML = `<tr><td colspan="3">${t('loading')}</td></tr>`;
+
+  const [originStats, destStats] = await Promise.all([
+    fetchCityAlertStats(origin),
+    fetchCityAlertStats(destination)
+  ]);
+
+  body.innerHTML = [originStats, destStats].map(s => `
+    <tr>
+      <td style="text-align: right; padding: 8px;">${s.city}</td>
+      <td style="text-align: right; padding: 8px;">${s.last24h}</td>
+      <td style="text-align: right; padding: 8px;">${s.total}</td>
+    </tr>
+  `).join('');
+}
+
+async function fetchCityAlertStats(cityName) {
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const warStart = '2023-10-07T00:00:00Z';
+
+  try {
+    const [stats24h, statsWar] = await Promise.all([
+      fetchJsonWithFallback(`/api/stats/cities?limit=1&search=${encodeURIComponent(cityName)}&startDate=${yesterday}`),
+      fetchJsonWithFallback(`/api/stats/cities?limit=1&search=${encodeURIComponent(cityName)}&startDate=${warStart}`)
+    ]);
+
+    const findExact = (data) => data?.data?.find(c => c.city === cityName) || data?.data?.[0];
+    const match24h = findExact(stats24h);
+    const matchWar = findExact(statsWar);
+
+    return {
+      city: cityName,
+      last24h: match24h ? match24h.count : 0,
+      total: matchWar ? matchWar.count : 0
+    };
+  } catch (err) {
+    console.error(`Failed to fetch stats for ${cityName}`, err);
+    return { city: cityName, last24h: '?', total: '?' };
+  }
+}
+
+async function fetchStatsLeaderboard() {
+  const container = document.getElementById('leaderboard-container');
+  if (!container) return;
+
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const data = await fetchJsonWithFallback(`/api/stats/cities?limit=5&sort=count&order=desc&startDate=${yesterday}`);
+    if (data && data.data) {
+      container.innerHTML = data.data.map(c => `
+        <div class="leaderboard-row">
+          <span class="leaderboard-city">${c.city}</span>
+          <span class="leaderboard-count">${t('leaderboardCount', { count: c.count })}</span>
+        </div>
+      `).join('');
+    } else {
+      container.innerHTML = `<p class="subtle">${t('statsNoData')}</p>`;
+    }
+  } catch (err) {
+    console.error('Leaderboard fetch failed', err);
+    container.innerHTML = `<p class="subtle">${t('statsError')}</p>`;
+  }
+}
+
+function bindControls() {
+  setupAutocomplete(els.fromInput, els.fromSuggestions, 'from');
+  setupAutocomplete(els.toInput, els.toSuggestions, 'to');
+
+  // Duration removal: removed event listener for durationTabs.
+
+
+  if (els.timelineZoom) {
+    els.timelineZoom.addEventListener('click', (event) => {
+      const btn = event.target.closest('.zoom-btn');
+      if (!btn) return;
+      els.timelineZoom.querySelectorAll('.zoom-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.timelineRangeHours = Number(btn.dataset.hours || 24);
+      hydrateTimeline(); // Re-fetch or re-render
+    });
+  }
+
+  els.modeButtons.addEventListener('click', (event) => {
+    const btn = event.target.closest('.mode');
+    if (!btn) return;
+    els.modeButtons.querySelectorAll('.mode').forEach((modeBtn) => modeBtn.classList.remove('active'));
+    btn.classList.add('active');
+    state.mode = btn.dataset.mode || 'foot';
+  });
+
+  els.goBtn.addEventListener('click', () => {
+    pulseButton(els.goBtn);
+    const result = calculateRoute();
+    if (!result) return;
+    state.lastResult = result;
+    renderResult(result);
+    displayRouteStats(state.from, state.to);
+  });
+
+  els.shareBtn.addEventListener('click', async () => {
+    pulseButton(els.shareBtn);
+    if (!state.lastResult) {
+      toast(t('runCheckFirstShare'));
       return;
     }
-    state.selectedWindowIndex = best.idx;
-    renderNapWindowSelection();
-    if (best.idx === 0) {
-      startNapGuard();
-    } else {
-      showToast(t('bestNapStarts', { time: formatHour(best.entry.start) }));
+
+    const shareVerdictLabel = getVerdictCopy(state.lastResult.verdict.key).label;
+    const payload = `${shareVerdictLabel} | ${state.lastResult.fromCity} -> ${state.lastResult.toCity} | ${state.durationMin}m by ${getSelectedModeLabel()}. ${state.lastResult.punchline}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Bring Coffee?',
+          text: payload
+        });
+        return;
+      } catch (_err) {
+        // Fall back to clipboard if dialog was dismissed.
+      }
     }
-  });
-
-  els.quickFindShelter.addEventListener('click', findShelters);
-
-  els.quickCopyReport.addEventListener('click', async () => {
-    const best = getBestWindow();
-    const summary = [
-      `Risk: ${currentRiskScore()}%`,
-      `Best nap: ${best ? formatHour(best.entry.start) : '--:--'}`,
-      `Alerts 24h: ${els.alerts24h.textContent}`,
-      `Shelters nearby: ${state.sheltersFound}`
-    ].join(' | ');
 
     try {
-      await navigator.clipboard.writeText(summary);
-      showToast(t('statusCopied'));
-    } catch (_error) {
-      showToast(t('statusCopyFailed'));
+      await navigator.clipboard.writeText(payload);
+      toast(t('shareCopied'));
+    } catch (_err) {
+      toast(t('shareCopyFail'));
     }
   });
 
-  els.startNapBtn.addEventListener('click', startNapGuard);
-  els.stopNapBtn.addEventListener('click', stopNapGuard);
-  els.connectProdBtn.addEventListener('click', () => connectSocket());
-  els.findShelterBtn.addEventListener('click', findShelters);
-  els.checkRouteBtn.addEventListener('click', runRouteCheck);
-  els.routeUseBestBtn.addEventListener('click', () => {
-    const best = getBestWindow();
-    if (!best) return;
-    const suggestedDelay = Math.max(0, Math.round((best.entry.start.getTime() - Date.now()) / 60000));
-    showToast(suggestedDelay > 0
-      ? `Suggested wait: ${suggestedDelay} minutes before run.`
-      : 'Best window is now.');
+  els.saveBtn.addEventListener('click', () => {
+    pulseButton(els.saveBtn);
+    if (!state.lastResult) {
+      toast(t('runCheckFirstSave'));
+      return;
+    }
+
+    const key = 'bring_coffee_saved_routes';
+    const existing = JSON.parse(window.localStorage.getItem(key) || '[]');
+    existing.unshift(state.lastResult);
+    window.localStorage.setItem(key, JSON.stringify(existing.slice(0, 20)));
+    toast(t('saved'));
   });
+
+  els.langEn.addEventListener('click', () => {
+    if (state.lang === 'en') return;
+    state.lang = 'en';
+    window.localStorage.setItem('bring_coffee_lang', 'en');
+    applyLanguageUI();
+    if (state.lastResult) renderResult(state.lastResult);
+  });
+
+  els.langHe.addEventListener('click', () => {
+    if (state.lang === 'he') return;
+    state.lang = 'he';
+    window.localStorage.setItem('bring_coffee_lang', 'he');
+    applyLanguageUI();
+    if (state.lastResult) renderResult(state.lastResult);
+  });
+
+  document.getElementById('search-shelter-btn')?.addEventListener('click', () => {
+    const city = document.getElementById('shelter-city-input')?.value;
+    if (city) performShelterSearch({ city });
+  });
+
+  document.getElementById('near-me-btn')?.addEventListener('click', () => {
+    if (navigator.geolocation) {
+      document.getElementById('shelter-results').innerHTML = `<p class="subtle">${t('shelterLoading')}</p>`;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => performShelterSearch({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        () => { alert('Geolocation failed'); renderShelterResults([]); }
+      );
+    }
+  });
+}
+
+/** Verdict Map Logic **/
+function initVerdictMap() {
+  if (state.map || !els.verdictMap) return;
+
+  state.map = L.map('verdict-map', {
+    zoomControl: false,
+    attributionControl: false
+  }).setView([31.5, 34.8], 7);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_labels_under/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19
+  }).addTo(state.map);
+}
+
+async function updateVerdictMap(fromCity, toCity) {
+  if (!state.map) initVerdictMap();
+  
+  els.verdictMap.classList.add('active');
+
+  // Clear markers
+  state.mapMarkers.forEach(m => state.map.removeLayer(m));
+  state.mapMarkers = [];
+
+  try {
+    const cleanFrom = fromCity.split(' - ')[0].split(' • ')[0].trim();
+    const cleanTo = toCity.split(' - ')[0].split(' • ')[0].trim();
+    console.log('Fetching coords for:', { fromCity, toCity, cleanFrom, cleanTo });
+
+    const [fromCoords, toCoords] = await Promise.all([
+      fetchJsonWithFallback(`/api/city-coords?city=${encodeURIComponent(cleanFrom)}`),
+      fetchJsonWithFallback(`/api/city-coords?city=${encodeURIComponent(cleanTo)}`)
+    ]);
+
+    if (!fromCoords.lat || !toCoords.lat) return;
+
+    const start = [fromCoords.lat, fromCoords.lon];
+    const end = [toCoords.lat, toCoords.lon];
+
+    // Markers for start/end
+    const startMarker = L.circleMarker(start, {
+      radius: 8,
+      fillColor: '#5C4A42',
+      color: '#fff',
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 1
+    }).addTo(state.map).bindPopup(fromCity);
+
+    const endMarker = L.circleMarker(end, {
+      radius: 8,
+      fillColor: '#8C5A35',
+      color: '#fff',
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 1
+    }).addTo(state.map).bindPopup(toCity);
+
+    state.mapMarkers.push(startMarker, endMarker);
+
+    // Dashed line
+    const line = L.polyline([start, end], {
+      color: '#A87C63',
+      weight: 3,
+      opacity: 0.6,
+      dashArray: '8, 8'
+    }).addTo(state.map);
+    state.mapMarkers.push(line);
+
+    // Fit map to markers perfectly by giving the DOM time to render the map container
+    setTimeout(() => {
+      state.map.invalidateSize();
+      state.map.fitBounds(L.latLngBounds([start, end]), { padding: [50, 50] });
+    }, 100);
+
+    // Fetch shelters
+    const mid1 = [
+      start[0] + (end[0] - start[0]) * 0.33,
+      start[1] + (end[1] - start[1]) * 0.33
+    ];
+    const mid2 = [
+      start[0] + (end[0] - start[0]) * 0.66,
+      start[1] + (end[1] - start[1]) * 0.66
+    ];
+
+    const shelterRequests = [
+      fetchJsonWithFallback(`/api/shelter/search?lat=${start[0]}&lon=${start[1]}&radiusKm=5`),
+      fetchJsonWithFallback(`/api/shelter/search?lat=${end[0]}&lon=${end[1]}&radiusKm=5`),
+      fetchJsonWithFallback(`/api/shelter/search?lat=${mid1[0]}&lon=${mid1[1]}&radiusKm=8`),
+      fetchJsonWithFallback(`/api/shelter/search?lat=${mid2[0]}&lon=${mid2[1]}&radiusKm=8`)
+    ];
+
+    const shelterSets = await Promise.all(shelterRequests);
+    
+    shelterSets.forEach(set => {
+      const shelters = Array.isArray(set) ? set : (set && set.results) ? set.results : [];
+      shelters.slice(0, 5).forEach(s => {
+        const isKnownAddress = s.address && !String(s.address).toLowerCase().includes('unknown');
+        const validAddress = isKnownAddress ? s.address : null;
+        const displayName = s.building_name || validAddress || s.city || 'מקלט ציבורי';
+
+        const sm = L.circleMarker([s.lat, s.lon], {
+          radius: 4,
+          fillColor: '#22c55e',
+          color: '#fff',
+          weight: 1,
+          opacity: 0.8,
+          fillOpacity: 0.6
+        }).addTo(state.map).bindPopup(displayName);
+        state.mapMarkers.push(sm);
+      });
+    });
+
+    state.map.fitBounds(line.getBounds(), { padding: [30, 30] });
+    
+    // Fix leaflet grey tile issue on dynamic display
+    setTimeout(() => state.map.invalidateSize(), 400);
+
+  } catch (err) {
+    console.warn('Map update failed', err);
+  }
+}
+
+async function hydrateCities() {
+  try {
+    const [citiesResult, statsResult, summaryResult] = await Promise.allSettled([
+      fetchJsonWithFallback(API.cities),
+      fetchJsonWithFallback(API.cityStats),
+      fetchJsonWithFallback(`${API.summary}?include=totals`)
+    ]);
+
+    const citiesPayload = citiesResult.status === 'fulfilled' ? citiesResult.value : [];
+    const statsPayload = statsResult.status === 'fulfilled' ? statsResult.value : [];
+    const summaryPayload = summaryResult.status === 'fulfilled' ? summaryResult.value : null;
+
+    const statMap = new Map();
+    if (Array.isArray(statsPayload)) {
+      for (const row of statsPayload) {
+        statMap.set(String(row.city || '').toLowerCase(), row);
+      }
+    }
+
+    const merged = (Array.isArray(citiesPayload) ? citiesPayload : [])
+      .map((city) => {
+        const hit = statMap.get(String(city.city || '').toLowerCase()) || {};
+        return normalizeCity({ ...city, ...hit });
+      })
+      .filter((item) => item.city.length > 0);
+
+    if (summaryPayload?.totals?.last24h) {
+      state.globalRecent24h = Number(summaryPayload.totals.last24h);
+    }
+
+    if (merged.length >= 8) {
+      state.allCities = merged;
+      state.liveDataReady = true;
+      if (summaryResult.status !== 'fulfilled') {
+        // Summary is optional; do not block live mode when city data is available.
+        toast(t('liveNoSummary'));
+      }
+      return;
+    }
+
+    state.liveDataReady = false;
+    state.allCities = [];
+  } catch (_err) {
+    state.liveDataReady = false;
+    state.allCities = [];
+  }
+}
+
+function bootstrapDefaults() {
+  state.from = '';
+  state.to = '';
+  els.fromInput.value = state.from;
+  els.toInput.value = state.to;
 }
 
 async function init() {
-  loadLanguage();
-  syncLanguageButtons();
-  applyStaticTranslations();
-  updateBackgroundInteractivity();
-  loadChecklist();
-  loadSavedApiKey();
-  bindEvents();
+  // Always start in Hebrew regardless of last session.
+  state.lang = 'he';
 
-  try {
-    await loadHistory();
-    buildHourlyRiskFromHistory();
-  } catch (_error) {
-    addFeedItem(t('couldNotLoadHistory'));
-  }
-
-  try {
-    await loadCityStats();
-  } catch (_error) {
-    addFeedItem('Could not load city statistics for route checker.');
-  }
-
-  let summary = null;
-  try {
-    summary = await loadSummaryStats();
-  } catch (_error) {
-    els.alerts24h.textContent = 'N/A';
-    els.peakPeriod.textContent = 'N/A';
-    addFeedItem(t('couldNotLoadSummary'));
-  }
-
-  computeNapWindows();
-  createCharts(summary?.timeline || []);
-  refreshChartLanguage();
-  renderNapWindowSelection();
-  renderKpis();
-  updatePrepUI();
-  updateCoachLine();
-  els.shelterStatus.textContent = t('shelterPressButton');
-  connectSocket();
-
-  window.setInterval(() => {
-    renderKpis();
-  }, 20000);
+  applyLanguageUI();
+  bootstrapDefaults();
+  bindControls();
+  initVerdictMap();
+  await hydrateCities();
+  await hydrateTimeline();
 }
 
 init();
+
+/** Coffee Run Mini-Game **/
+let gameCtx, gameAnimId;
+let player = { x: 276, width: 48, height: 48, speed: 6, dx: 0 };
+let items = []; 
+let gameScore = 0;
+let isGameOver = false;
+
+function initMiniGame() {
+  const canvas = document.getElementById('game-canvas');
+  if (!canvas) return;
+  gameCtx = canvas.getContext('2d');
+  
+  const startBtn = document.getElementById('start-game-btn');
+  if (startBtn) startBtn.addEventListener('click', startGame);
+
+  // Keyboard controls
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') player.dx = -player.speed;
+    if (e.key === 'ArrowRight') player.dx = player.speed;
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') player.dx = 0;
+  });
+
+  // Touch/Mouse controls for mobile
+  canvas.addEventListener('pointerdown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    player.dx = x < canvas.width / 2 ? -player.speed : player.speed;
+  });
+  canvas.addEventListener('pointerup', () => player.dx = 0);
+  
+  // Draw initial frame
+  gameCtx.font = '48px Arial';
+  gameCtx.fillText('🏃', player.x, 290);
+}
+
+function startGame() {
+  document.getElementById('game-overlay').style.display = 'none';
+  document.getElementById('game-score-display').style.display = 'block';
+  
+  player.x = 276;
+  player.dx = 0;
+  items = [];
+  gameScore = 0;
+  isGameOver = false;
+  updateScoreDisplay();
+  
+  if (gameAnimId) cancelAnimationFrame(gameAnimId);
+  gameLoop();
+}
+
+function updateScoreDisplay() {
+  const scoreEl = document.getElementById('game-score-display');
+  if (scoreEl) scoreEl.textContent = `Score: ${gameScore}`;
+}
+
+function gameLoop() {
+  if (isGameOver) return;
+  updateGame();
+  drawGame();
+  gameAnimId = requestAnimationFrame(gameLoop);
+}
+
+function updateGame() {
+  player.x += player.dx || 0;
+  if (player.x < 0) player.x = 0;
+  if (player.x > 600 - player.width) player.x = 600 - player.width;
+
+  // Spawn items
+  if (Math.random() < 0.035) {
+    items.push({
+      x: Math.random() * (600 - 48),
+      y: -50, // start slightly higher due to larger emoji
+      type: Math.random() < 0.75 ? 'coffee' : 'missile',
+      speed: 3 + Math.random() * 2 + (gameScore * 0.008) // much slower progressive difficulty
+    });
+  }
+
+  // Move & detect collisions
+  for (let i = items.length - 1; i >= 0; i--) {
+    let item = items[i];
+    item.y += item.speed;
+
+    // Hitbox is slightly smaller than the 48px visual
+    if (
+      item.x < player.x + player.width - 10 &&
+      item.x + 38 > player.x + 10 &&
+      item.y < 280 + player.height - 10 &&
+      item.y + 38 > 280 + 10
+    ) {
+      if (item.type === 'coffee') {
+        gameScore += 10;
+        updateScoreDisplay();
+        items.splice(i, 1);
+      } else {
+        gameOver();
+        return;
+      }
+    } else if (item.y > 350) {
+      items.splice(i, 1);
+    }
+  }
+}
+
+function drawGame() {
+  gameCtx.clearRect(0, 0, 600, 300);
+  gameCtx.font = '48px Arial';
+  gameCtx.fillText('🏃', player.x, 290);
+
+  items.forEach(item => {
+    gameCtx.fillText(item.type === 'coffee' ? '☕' : '🚀', item.x, item.y + 40);
+  });
+}
+
+function gameOver() {
+  isGameOver = true;
+  document.getElementById('game-overlay').style.display = 'flex';
+  document.getElementById('game-overlay').style.background = 'rgba(15, 23, 42, 0.85)';
+  document.getElementById('start-game-btn').style.display = 'block';
+  document.getElementById('start-game-btn').textContent = 'Play Again';
+  document.getElementById('game-desc').innerHTML = `Game Over! Caught a missile 💥<br>Final Score: ${gameScore}`;
+  document.getElementById('game-desc').style.display = 'block';
+  document.getElementById('game-title').style.display = 'block';
+  document.getElementById('game-score-display').style.display = 'none';
+}
+
+// Call initMiniGame on load
+document.addEventListener('DOMContentLoaded', () => {
+  initMiniGame();
+});
