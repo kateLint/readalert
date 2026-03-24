@@ -251,8 +251,12 @@ app.get('/', (_req, res) => {
   res.json({ ok: true, source: 'RedAlert proxy', docs: 'https://redalert.orielhaim.com/docs/api-reference' });
 });
 
-app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[server] RedAlert proxy listening on http://localhost:${PORT}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    // eslint-disable-next-line no-console
+    console.log(`[server] RedAlert proxy listening on http://localhost:${PORT}`);
+  });
+}
+
+export default app;
 
