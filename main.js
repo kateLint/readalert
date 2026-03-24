@@ -186,7 +186,7 @@ const I18N = {
     modeCar: 'Car',
     goBtn: 'Should I go?',
     contextTitle: 'Quick context',
-    originPressureLabel: 'Origin pressure',
+    originPressureLabel: 'Max city pressure',
     recentWindowLabel: 'Recent alert window',
     shelterSpeedLabel: 'Shelter reach speed',
     routeScoreLabel: 'Route score',
@@ -302,7 +302,7 @@ const I18N = {
     modeCar: 'רכב',
     goBtn: 'לצאת?',
     contextTitle: 'הקשר מהיר',
-    originPressureLabel: 'לחץ בעיר המוצא',
+    originPressureLabel: 'לחץ עיר מירבי',
     recentWindowLabel: 'חלון התרעה אחרון',
     shelterSpeedLabel: 'מהירות הגעה למקלט',
     routeScoreLabel: 'ציון מסלול',
@@ -735,10 +735,14 @@ function animateVerdictCard() {
 }
 
 function normalizeCity(item) {
+  // item.count is total historical alerts. Scale it drastically down so safe cities aren't 95/100
+  const historicalFactor = item.count ? Math.min(60, Number(item.count) * 0.05) : 10;
+  const finalPressure = item.pressure !== undefined ? Number(item.pressure) : Math.max(4, Math.min(95, historicalFactor));
+  
   return {
     city: String(item.city || item.name || '').trim(),
     region: String(item.region || item.cityZone || item.zone || 'Unknown').trim(),
-    pressure: Math.max(4, Math.min(95, Number(item.pressure || item.count || 20))),
+    pressure: Math.round(finalPressure),
     shelterEtaMin: Math.max(2, Math.min(12, Number(item.shelterEtaMin || 4))),
     recentAlertsMinAgo: Math.max(4, Math.min(200, Number(item.recentAlertsMinAgo || 45)))
   };
@@ -810,7 +814,8 @@ function renderResult(result) {
     mode: getSelectedModeLabel()
   });
 
-  els.originPressure.textContent = `${fromObj.pressure}/100`;
+  const maxRoutePressure = Math.max(fromObj.pressure, toObj.pressure);
+  els.originPressure.textContent = `${maxRoutePressure}/100`;
   els.recentWindow.textContent = formatTpl(t('recentAgoFmt'), { minutes: recentWindowMin });
   els.shelterSpeed.textContent = formatTpl(t('shelterAvgFmt'), {
     minutes: Math.round((fromObj.shelterEtaMin + toObj.shelterEtaMin) / 2)
