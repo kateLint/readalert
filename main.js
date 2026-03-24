@@ -677,7 +677,9 @@ function renderHourlyAlertTimeline(source = []) {
 }
 
 async function fetchJsonWithFallback(path) {
-  const targets = [path, `${DIRECT_API_BASE}${path}`];
+  const targets = [path];
+  // In local dev, also try the direct Express server URL as fallback
+  if (DIRECT_API_BASE) targets.push(`${DIRECT_API_BASE}${path}`);
   let lastError = null;
 
   for (const target of targets) {
