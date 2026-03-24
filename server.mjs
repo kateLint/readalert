@@ -96,14 +96,7 @@ async function fetchRedAlertHistory(limit = 100) {
 }
 
 async function fetchRedAlertCities(limit = 500) {
-  const data = await requestRedAlert('/api/stats/cities', { limit }).catch((error) => {
-    // eslint-disable-next-line no-console
-    console.error('[server] RedAlert cities error', error.message);
-    return null;
-  });
-
-  if (!data) return [];
-
+  const data = await requestRedAlert('/api/stats/cities', { limit });
   const cities = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];
   return cities;
 }
