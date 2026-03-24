@@ -987,6 +987,14 @@ async function fetchCityAlertStats(cityName) {
     const match24h = findExact(stats24h);
     const matchWar = findExact(statsWar);
 
+    // Update footer timestamp
+    const footerTimeEl = document.getElementById('last-updated-footer');
+    if (footerTimeEl) {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('he-IL', { hour12: false });
+      footerTimeEl.textContent = `עודכן לאחרונה: ${timeStr}`;
+    }
+
     return {
       city: cityName,
       last24h: match24h ? match24h.count : 0,

@@ -173,6 +173,45 @@ body {
   gap: 16px;
 }
 
+/* Footer */
+.app-footer {
+  text-align: center;
+  padding: 24px 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  margin-top: 40px;
+}
+
+.app-footer p {
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.footer-socials {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+.footer-socials a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+
+.footer-socials a:hover {
+  opacity: 0.8;
+  text-decoration: underline;
+}
+
+.footer-socials span {
+  color: var(--border);
+}
+
 .card {
   background: linear-gradient(180deg, var(--surface-strong), var(--surface));
   border: 1px solid var(--border);
