@@ -197,10 +197,9 @@ const I18N = {
     destinationShelterTitle: 'Dropoff side shelter',
     timelineTitle: 'Alert Timeline',
     timelineSubtitle: 'Last 24 hours, by hour',
-    timelineTotalFmt: 'Total: {count}',
+    timelineTotalFmt: 'Total alerts: {count}',
     timelinePeakFmt: 'Peak hour: {hour}',
-    timelineNowFmt: 'Now: {count}',
-    timelineNowAtFmt: 'Now: {time}',
+    timelineNowFmt: 'Last hour: {count}',
     timelineDetailFmt: '{hour} • {count} alerts',
     shareSmall: 'Bring Coffee?',
     fromPlaceholder: 'Tel Aviv',
@@ -313,10 +312,9 @@ const I18N = {
     destinationShelterTitle: 'מקלט בצד היעד',
     timelineTitle: 'ציר התרעות',
     timelineSubtitle: 'התפתחות לפי שעה',
-    timelineTotalFmt: 'סה״כ: {count}',
+    timelineTotalFmt: 'סה״כ התרעות: {count}',
     timelinePeakFmt: 'שעת שיא: {hour}',
-    timelineNowFmt: 'עכשיו: {count}',
-    timelineNowAtFmt: 'עכשיו: {time}',
+    timelineNowFmt: 'בשעה האחרונה: {count}',
     timelineDetailFmt: '{hour} • {count} התרעות',
     shareSmall: 'להביא קפה?',
     fromPlaceholder: 'תל אביב',
@@ -596,7 +594,6 @@ function renderHourlyAlertTimeline(source = []) {
       <span class="timeline-chip">${formatTpl(t('timelineTotalFmt'), { count: total })}</span>
       <span class="timeline-chip">${formatTpl(t('timelinePeakFmt'), { hour: fmtHour(bucketHourAt(peak.idx)) })}</span>
       <span class="timeline-chip">${formatTpl(t('timelineNowFmt'), { count: buckets[23] })}</span>
-      <span class="timeline-chip">${formatTpl(t('timelineNowAtFmt'), { time: nowTimeLabel })}</span>
     `;
   }
 
