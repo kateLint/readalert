@@ -11,8 +11,8 @@ if (!REDALERT_API_KEY) {
   // eslint-disable-next-line no-console
   console.warn(
     '[server] REDALERT_API_KEY is not set. Real data will not load. ' +
-    'Get an API key from https://redalert.orielhaim.com/docs/quick-start and ' +
-    'start the server with REDALERT_API_KEY=pr_loOvnUUAGOmFCKmjWiWdotQdeygLLMcneLPIYIMrgAxOdvoUjSAhGmZFuWVtwJGX'
+    'Get a key at https://redalert.orielhaim.com/docs/quick-start ' +
+    'and set it in .env (locally) or Vercel environment variables (production).'
   );
 }
 
