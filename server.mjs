@@ -84,13 +84,13 @@ async function requestRedAlert(pathname, query = {}) {
 }
 
 async function fetchRedAlertHistory(limit = 100) {
+  // RedAlert API strictly enforces limit ≤ 100 (no pagination support)
   const data = await requestRedAlert('/api/stats/history', {
-    limit,
+    limit: Math.min(limit, 100),
     sort: 'timestamp',
     order: 'desc'
   });
 
-  // According to RedAlert docs, this should be either an array of alerts or { data: [...] }.
   const alerts = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];
   return alerts;
 }

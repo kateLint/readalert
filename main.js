@@ -706,7 +706,7 @@ function showTimelineError() {
 
 async function hydrateTimeline() {
   try {
-    const data = await fetchJsonWithFallback('/api/alerts?limit=1500');
+    const data = await fetchJsonWithFallback('/api/alerts?limit=100');
     if (!Array.isArray(data)) {
       showTimelineError();
       return;
