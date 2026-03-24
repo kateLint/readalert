@@ -81,16 +81,10 @@ async function requestRedAlert(pathname, query = {}) {
 
 async function fetchRedAlertHistory(limit = 100) {
   const data = await requestRedAlert('/api/stats/history', {
-    limit: Math.min(limit, 100),
+    limit,
     sort: 'timestamp',
     order: 'desc'
-  }).catch((error) => {
-    // eslint-disable-next-line no-console
-    console.error('[server] RedAlert history error', error.message);
-    return null;
   });
-
-  if (!data) return [];
 
   // According to RedAlert docs, this should be either an array of alerts or { data: [...] }.
   const alerts = Array.isArray(data) ? data : Array.isArray(data.data) ? data.data : [];

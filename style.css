@@ -952,6 +952,16 @@ html[dir='rtl'] .suggestion {
   color: #b91c1c;
 }
 
+.timeline-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  color: var(--text-muted, #999);
+  font-size: 0.875rem;
+  font-style: italic;
+}
+
 .toast {
   position: fixed;
   left: 50%;

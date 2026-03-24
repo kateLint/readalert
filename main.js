@@ -216,6 +216,7 @@ const I18N = {
     liveDataRequired: 'Live data is required. Start the API server and verify your API key.',
     liveDataLoaded: 'Live data connected successfully.',
     liveNoSummary: 'Live data connected (summary stats are temporarily unavailable).',
+    timelineError: 'No alert data available right now',
     runCheckFirstShare: 'Run a route check first, then share it.',
     runCheckFirstSave: 'Run a route check first, then save.',
     shareCopied: 'Share text copied to clipboard.',
@@ -331,6 +332,7 @@ const I18N = {
     liveDataRequired: 'נדרש מידע חי. הפעילו את שרת ה-API ובדקו את מפתח ה-API.',
     liveDataLoaded: 'התחברות למידע חי הצליחה.',
     liveNoSummary: 'מידע חי זמין (נתוני סיכום זמנית לא זמינים).',
+    timelineError: 'אין נתוני התרעות זמינים כרגע',
     runCheckFirstShare: 'קודם הריצו בדיקת מסלול ואז שתפו.',
     runCheckFirstSave: 'קודם הריצו בדיקת מסלול ואז שמרו.',
     shareCopied: 'טקסט השיתוף הועתק ללוח.',
@@ -692,12 +694,22 @@ async function fetchJsonWithFallback(path) {
   throw lastError || new Error('Failed to fetch live API data');
 }
 
+function showTimelineError() {
+  const chart = document.getElementById('alerts-chart');
+  if (!chart) return;
+  chart.innerHTML = `<p class="timeline-empty">${t('timelineError')}</p>`;
+}
+
 async function hydrateTimeline() {
   try {
     const data = await fetchJsonWithFallback('/api/alerts?limit=1500');
-    renderHourlyAlertTimeline(Array.isArray(data) ? data : []);
+    if (!Array.isArray(data)) {
+      showTimelineError();
+      return;
+    }
+    renderHourlyAlertTimeline(data);
   } catch (err) {
-    renderHourlyAlertTimeline([]);
+    showTimelineError();
   }
 }
 
