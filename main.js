@@ -281,7 +281,7 @@ const I18N = {
     statsNoData: 'No data available'
   },
   he: {
-    appName: 'להביא קפה?',
+    appName: 'להביא קפה? ☕',
     heroLabel: 'בדיקת יציאה בזמן אמת',
     heroDesc: 'מזינים מוצא ויעד ומקבלים תשובה אחת ברורה: לצאת עכשיו או לחכות.',
     purposeLine: 'מטרה: להבין תוך שניות אם כדאי לצאת עכשיו.',
